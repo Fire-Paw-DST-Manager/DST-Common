@@ -51,60 +51,25 @@ import png
 
 
 class Ktex:
-    _premul_factor = (
-        0, 16711935, 8355967, 5570645, 4177983, 3342387, 2785322, 2387419,
-        2088991, 1856881, 1671193, 1519266, 1392661, 1285533, 1193709, 1114129,
-        1044495, 983055, 928440, 879575, 835596, 795806, 759633, 726605,
-        696330, 668477, 642766, 618960, 596854, 576273, 557064, 539094,
-        522247, 506422, 491527, 477483, 464220, 451673, 439787, 428511,
-        417798, 407608, 397903, 388649, 379816, 371376, 363302, 355573,
-        348165, 341059, 334238, 327685, 321383, 315319, 309480, 303853,
-        298427, 293191, 288136, 283253, 278532, 273966, 269547, 265268,
-        261123, 257106, 253211, 249431, 245763, 242201, 238741, 235379,
-        232110, 228930, 225836, 222825, 219893, 217038, 214255, 211543,
-        208899, 206320, 203804, 201348, 198951, 196611, 194324, 192091,
-        189908, 187774, 185688, 183647, 181651, 179698, 177786, 175915,
-        174082, 172287, 170529, 168807, 167119, 165464, 163842, 162251,
-        160691, 159161, 157659, 156186, 154740, 153320, 151926, 150557,
-        149213, 147893, 146595, 145321, 144068, 142837, 141626, 140436,
-        139266, 138115, 136983, 135869, 134773, 133695, 132634, 131590,
-        130561, 129549, 128553, 127572, 126605, 125653, 124715, 123792,
-        122881, 121984, 121100, 120229, 119370, 118524, 117689, 116866,
-        116055, 115254, 114465, 113686, 112918, 112160, 111412, 110675,
-        109946, 109228, 108519, 107818, 107127, 106445, 105771, 105106,
-        104449, 103800, 103160, 102527, 101902, 101284, 100674, 100071,
-        99475, 98887, 98305, 97730, 97162, 96600, 96045, 95496,
-        94954, 94417, 93887, 93362, 92844, 92331, 91823, 91322,
-        90825, 90334, 89849, 89368, 88893, 88422, 87957, 87497,
-        87041, 86590, 86143, 85702, 85264, 84832, 84403, 83979,
-        83559, 83143, 82732, 82324, 81921, 81521, 81125, 80733,
-        80345, 79961, 79580, 79203, 78829, 78459, 78093, 77729,
-        77370, 77013, 76660, 76310, 75963, 75619, 75278, 74941,
-        74606, 74275, 73946, 73620, 73297, 72977, 72660, 72346,
-        72034, 71725, 71418, 71114, 70813, 70514, 70218, 69924,
-        69633, 69344, 69057, 68773, 68491, 68211, 67934, 67659,
-        67386, 67116, 66847, 66581, 66317, 66055, 65795, 65537
-    )
-    _PIXEL_FORMAT = {
-        # 饥荒应该只用 DXT1 DXT5  {bc1: dxt1, bc2: (dxt2, dxt3), bc3: (dxt4, dxt5)}
-        0b00000: 'DXT1',
-        0b00001: 'DXT3',
-        0b00010: 'DXT5',
-        0b00100: 'RGBA',
-        0b00101: 'RGB'
-    }
-    _PLATFORM = {
-        0b1100: 'PC',
-        0b1011: 'XBOX360',
-        0b1010: 'PS3',
-        0b0000: 'Default'
-    }
-    _TEXTURE_TYPE = {
-        0b0000: '1D',
-        0b0001: '2D',
-        0b0010: '3D',
-        0b0011: 'Cube Mapped'
-    }
+    class _PixelFormat(IntEnum):
+        DXT1 = 0b00000
+        DXT3 = 0b00001
+        DXT5 = 0b00010
+        RGBA = 0b00100
+        RGB = 0b00101
+
+    class _Platform(IntEnum):
+        PC = 0b1100
+        XBOX360 = 0b1011
+        PS3 = 0b1010
+        DEFAULT = 0b0000
+
+    class _TextureType(IntEnum):
+        D1 = 0b0000
+        D2 = 0b0001
+        D3 = 0b0010
+        CUBEMAP = 0b0011
+
     _FLAGS = 0b11
     _REMAINDER = 0b111111111111
 
@@ -140,10 +105,15 @@ class Ktex:
         self.premultiply = True
 
         if file_path:
-            self.read_data(file_path, file_type)
+            self.load_file(file_path, file_type)
 
-    def read_data(self, file_path: str, file_type: str = None):
-        self.file_path = file_path
+    def load_file(self, file_path: str = None, file_type: str = None):
+        if file_path is None:
+            if self.file_path is None:
+                raise ValueError('文件路径为空')
+            file_path = self.file_path
+        else:
+            self.file_path = file_path
 
         if file_type == 'tex' or file_path.endswith('.tex'):
             self.file_type = 'tex'
@@ -169,8 +139,8 @@ class Ktex:
             mode = 'RGB'
             self.width, self.height, rows, info = img.asRGB8()
 
-        self.pitch = self._pitch(mode)
-        self.data_size = self._data_size(mode)
+        self.pitch = self._cal_pitch(mode)
+        self.data_size = self._cal_data_size(mode)
         self._set_header(mode)
 
         self._img_data = bytearray(b''.join(reversed(tuple(rows))))
@@ -179,7 +149,7 @@ class Ktex:
 
         self._build_tex()
 
-    def _pitch(self, mode):
+    def _cal_pitch(self, mode):
         match mode:
             case 'DXT5':
                 bytes_per_block = 16
@@ -194,7 +164,7 @@ class Ktex:
             case _:
                 raise
 
-    def _data_size(self, mode):
+    def _cal_data_size(self, mode):
         match mode:
             case 'DXT5':
                 pass
@@ -208,32 +178,13 @@ class Ktex:
                 raise
 
     def _set_header(self, img_mode: str):
-        platform = 'Default'
-        pixel_format = img_mode
-        texture_type = '2D'
-        flags = self._FLAGS
-        remainder = self._REMAINDER
-        mipmaps = 1
-        # size         mipmaps
-        # 2048 x 2048  12     |  1024 x 1024  11      |  512  x 512   10  |  256  x 256   9
-        # 2048 x 1024  12     |  1024 x 512   11      |  512  x 256   10  |  64   x 64    7
-        #                     |  1024 x 252   1       |  512  x 128   10  |  32   x 32    6
-        #                     |  1024 x 32    1 | 11  |  512  x 64    10
-        # DXTn
-        #   mipmaps = int(max(log2(w), log2(h))) + 1
-        #   例外：
-        #       '\images\fepanels.tex': 2048 x 2048  mipmaps: 1
-        #       'images\wave_shadow.tex': 1024x252  mipmaps: 1
-        # RGB(A)
-        #   mipmaps = 1
-
         self.header = {
-            'platform': {val: key for key, val in self._PLATFORM.items()}.get(platform),
-            'pixel_format': {val: key for key, val in self._PIXEL_FORMAT.items()}.get(pixel_format),
-            'texture_type': {val: key for key, val in self._TEXTURE_TYPE.items()}.get(texture_type),
-            'mipmaps': mipmaps,
-            'flags': flags,
-            'remainder': remainder,
+            'platform': self._Platform.DEFAULT,
+            'pixel_format': self._PixelFormat[img_mode],
+            'texture_type': self._TextureType.D2,
+            'mipmaps': 1,
+            'flags': self._FLAGS,
+            'remainder': self._REMAINDER,
         }
 
     def _parse_header(self):
@@ -246,13 +197,13 @@ class Ktex:
         #         remainder    flags mipmaps texture_type pixel_format platform'
         offset = 0
         len_tmp = self._HeaderDataLen
-        self.header['platform'] = self._PLATFORM[(header >> offset) & ((1 << len_tmp.platform) - 1)]
+        self.header['platform'] = self._Platform((header >> offset) & ((1 << len_tmp.platform) - 1)).name
 
         offset += len_tmp.platform
-        self.header['pixel_format'] = self._PIXEL_FORMAT[(header >> offset) & ((1 << len_tmp.pixel_format) - 1)]
+        self.header['pixel_format'] = self._PixelFormat((header >> offset) & ((1 << len_tmp.pixel_format) - 1)).name
 
         offset += len_tmp.pixel_format
-        self.header['texture_type'] = self._TEXTURE_TYPE[(header >> offset) & ((1 << len_tmp.texture_type) - 1)]
+        self.header['texture_type'] = self._TextureType((header >> offset) & ((1 << len_tmp.texture_type) - 1)).name
 
         offset += len_tmp.texture_type
         self.header['mipmaps'] = (header >> offset) & ((1 << len_tmp.mipmaps) - 1)
@@ -267,7 +218,6 @@ class Ktex:
         # if self.header['pixel_format'] == 'DXT5' and self.header['mipmaps'] != int(max(log2(self.width), log2(self.height))) + 1:
         print(self.file_path)
         print(f'{self.header}\n{self.pitch=} {self.data_size=}\n{self.width} x {self.height}')
-        print(f'')
 
         self._tex_data = self._tex_data[4 + 4 + self.header['mipmaps'] * 10:]
 
@@ -347,23 +297,6 @@ class Ktex:
             tmp = tmp_all[self._img_data[i + 3]]
             self._img_data[i: i + 3] = tmp[self._img_data[i]], tmp[self._img_data[i + 1]], tmp[self._img_data[i + 2]]
 
-            # 非常的慢
-            # self._img_data[i: i + 4] = self._premultiply_single(*self._img_data[i:i + 4])
-
-    @staticmethod
-    def _premultiply_single(r, g, b, a):
-        def div_255_round(n):
-            # 最后发现在python里快不起来，还不如round(n/255)
-            if n < 32768:
-                # n ∈ [0~32378)      count(round(n/255) != this(n)) = 0
-                # n ∈ [32378~65536)  count(round(n/255) != this(n)) = 128
-                return (n + ((n >> 8) & 0xff) + 0x80) >> 8
-            # n ∈ [0~32378)      count(round(n/255) != this(n)) = 129
-            # n ∈ [32378~65536)  count(round(n/255) != this(n)) = 0
-            return (n + 1 + ((n + 1) >> 8) + 0x80) >> 8
-
-        return div_255_round(r * a), div_255_round(g * a), div_255_round(b * a), a
-
     def _unpremultiply_alpha(self):
         tmp_cal_all = [[0] * 256, *([min(255, round(n * 255 / a)) for n in range(256)] for a in range(1, 256))]
         tmp = bytearray(self._img_data)
@@ -374,26 +307,7 @@ class Ktex:
             tmp_cal = tmp_cal_all[a]
             tmp[i: i + 3] = tmp_cal[tmp[i]], tmp_cal[tmp[i + 1]], tmp_cal[tmp[i + 2]]
 
-            # 非常的慢
-            # tmp[i: i + 4] = self._unpremultiply_single(*tmp[i:i + 4])
         self._img_data = tmp
-
-    def _unpremultiply_single(self, r, g, b, a):
-        if a == 0:
-            return 0, 0, 0, 0
-        if a == 255:
-            return r, g, b, a
-
-        # (p*(0x00ff00ff//alpha)) >> 16 == (p*255)//alpha for all p and alpha <= 256.
-        # 预计算的 0x00ff00ff/alpha，用于将预乘后的rgb转回正常值    抄自qt
-        inv = self._premul_factor[a]
-
-        def cal(n):
-            n = (n * inv + 0x8000) >> 16
-            return n if n < 255 else 255
-
-        # return ((r * inv + 0x8000) >> 16) & 0xff, ((g * inv + 0x8000) >> 16) & 0xff, ((b * inv + 0x8000) >> 16) & 0xff, a
-        return cal(r), cal(g), cal(b), a
 
 
 class Dxt:
@@ -544,32 +458,29 @@ class Dxt:
         return alpha
 
 
-def test():
-    tex_path = r'C:\Users\suke\Desktop'
-    # tex_path = r"C:\Program Files (x86)\Steam\steamapps\common\Don't Starve Together\data"
-    # tex_path = r"C:\Program Files (x86)\Steam\steamapps\common\Don't Starve Together\mods\PersonalChanges\images"
-
-    # tex_path = r'C:\Users\suke\Desktop\tex'
-    # tex_path = r'C:\Users\suke\Desktop\png'
-    from pathlib import Path
-    from time import perf_counter
-
-    s = perf_counter()
-    tex = Ktex()
-    for xx in Path(tex_path).glob(
-            # '**/'
-            '*avatars'
-            # '*'
-            '.tex'
-            # '.png'
-    ):
-        print(f'convert {xx}')
-        tex.read_data(str(xx))
-
-        tex.save()
-
-    print(perf_counter() - s)
-
-
 if __name__ == "__main__":
+    def test():
+        tex_path = r'C:\Users\suke\Desktop\test'
+        # tex_path = r"C:\Program Files (x86)\Steam\steamapps\common\Don't Starve Together\data"
+
+        from pathlib import Path
+        from time import perf_counter
+
+        s = perf_counter()
+        tex = Ktex()
+        for xx in Path(tex_path).glob(
+                # '**/'
+                '*'
+                # '*'
+                # '.tex'
+                '.png'
+        ):
+            print(f'convert {xx}')
+            tex.load_file(str(xx))
+
+            tex.save()
+
+        print(perf_counter() - s)
+
+
     test()
