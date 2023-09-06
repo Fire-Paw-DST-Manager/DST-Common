@@ -1,0 +1,6 @@
+annotated-types==0.5.0
+lupa==2.0
+pydantic==2.3.0
+pydantic_core==2.6.3
+pypng==0.20220715.0
+typing_extensions==4.7.1
