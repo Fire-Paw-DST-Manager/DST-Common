@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-from random import randint
-from io import BytesIO
-from json import loads
 import logging as log
 import xml.etree.ElementTree as et
-from itertools import chain
+from collections import deque
+from io import BytesIO
+from json import loads
+from random import shuffle
+from typing import Union
 
 log.basicConfig(format='%(asctime)s | %(levelname)-8s | %(lineno)4d %(funcName)-10s | - %(message)s',
                 datefmt='%y-%m-%d %H:%M:%S',
@@ -34,7 +35,7 @@ class Svg:
 
     def __init__(self, ele=None, **kwargs) -> None:
         if not ele:
-            self._attr_svg.update(kwargs)
+            self._attr_svg.update({i: str(j) for i, j in kwargs.items()})
             self._attr_svg['viewBox'] = f'0 0 {self._attr_svg["width"]} {self._attr_svg["height"]}'
             self.root = self._create_svg()
             self._svg = et.ElementTree(self.root)
@@ -54,7 +55,7 @@ class Svg:
 
     def _create_css(self, css_text) -> None:
         # 测试每个元素单独设置 fill 和通过 css 统一设置 fill，在缩放测试下实际耗时差别不大
-        # 直接给 g 设置元素，不需要每个单独设置。效率未测试，直觉应该是比单独设置好的
+        # 直接给 g 元素设置，不需要每个单独设置。效率未测试，直觉应该是比单独设置好的
         defs = et.SubElement(self.root, 'defs')
         style = et.SubElement(defs, 'style', {'type': 'text/css'})
         # css = ''.join([f'#g{key} path {{fill:{val}}}' for key, val in color.items()])
@@ -88,7 +89,7 @@ class Svg:
 
     def creat_group(self, **kwargs) -> et.Element:
         if 'id' not in kwargs:
-            for index in range(9999):
+            for index in range(99999):
                 g_id = f'g{index}'
                 if g_id not in self.g:
                     kwargs['id'] = g_id
@@ -96,70 +97,330 @@ class Svg:
         return self.g[kwargs['id']]
 
 
+class Path:
+    """绘制图像的边缘
+    e.g. self.load_map
+        input ([
+                [1, 0, 0],
+                [0, 0, 0],
+                [0, 0, 1]
+                ])
+        output
+            3,
+            3,
+            {
+                0: [
+                    [(1, 0), (3, 0), (3, 2), (2, 2), (2, 3), (0, 3), (0, 1), (1, 1)]
+                ],
+                1: [
+                    [(0, 0), (1, 0), (1, 1), (0, 1)],
+                    [(2, 2), (3, 2), (3, 3), (2, 3)]
+                ],
+            }
+        *     *     *     *     |     *     *     *     *
+                                |        1     0  -  0
+        *     *           *     |     *     *  |     |  *
+                                |        0  -  0  -  0
+        *           *     *     |     *  |     |  *     *
+                                |        0  -  0     1
+        *     *     *     *     |     *     *     *     *
+    """
+
+    def __init__(self):
+        self.width: int = 0
+        self.height: int = 0
+
+        # 对于一个二维数组，如果子元素中保存的是一行的数据，认为是正常图，一列的数据则认为是翻转 x, y 轴的图，默认处理正常方向的图
+        self.flipped: bool = False
+
+        self.map_data: list[list[int]] = []
+
+        self.edges: dict[int, list[list[tuple[int, int]]]] = {}
+
+        self.paths: dict[int, list[str]] = {}
+
+    def load_map(self, map_data: list[list[int]], is_flipped: bool = False) -> tuple[int, int, dict[int, list[list[tuple[int, int]]]]]:
+
+        if not map_data or not map_data[0]:
+            return 0, 0, {}
+
+        if isinstance(map_data[0], int):
+            self.map_data = map_data.copy()
+        else:
+            self.map_data = [[j for j in i] for i in map_data]
+
+        if self.flipped != is_flipped:
+            self._flip_map()
+
+        if self.map_data:
+            self.width = len(self.map_data[0])
+            self.height = len(self.map_data)
+        else:
+            self.width = 0
+            self.height = 0
+
+        for ele_id, single_info in self._link_point().items():
+            self.edges[ele_id] = [self._attach(self._classify(rount)) for rount in single_info]
+
+        return self.width, self.height, self.edges
+
+    def _flip_map(self):
+        # 翻转 x, y 轴
+        self.map_data = [[i[x] for i in self.map_data] for x in range(len(self.map_data[0]))]
+
+    def _link_point(self) -> dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]]:
+        """分析传入地图信息，返回每种id的每块独立区域的边缘上的点与它们的出边
+        默认处理正常图，若要处理反转图，可以通过翻转输入
+        或调换函数内关于 self.map_data, map_data_padding, visited 的 x, y 值与 self.width, self.height
+        e.g.
+            self.map_data = [[0, 1],
+                             [1, 0]]
+
+                           |列表中每个字典代表一块独立区域|
+                    {编号: [{顶点坐标: {出边向量, }, }, ], }  # 终点坐标 = 顶点坐标 + 出边向量   存图方式类似邻接表
+            output: dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]] = {
+            0: [
+                {(0, 0): {(1, 0)}, (1, 0): {(0, 1)}, (1, 1): {(-1, 0)}, (0, 1): {(0, -1)}},  # 左上角的 0，没有与其它 0 相连，所以单独输出
+                {(1, 1): {(1, 0)}, (2, 1): {(0, 1)}, (2, 2): {(-1, 0)}, (1, 2): {(0, -1)}}   # 右下角的 0，没有与其它 0 相连，所以单独输出
+                ],
+            1: [
+                {(0, 1): {(1, 0)}, (1, 1): {(0, 1)}, (1, 2): {(-1, 0)}, (0, 2): {(0, -1)}},  # 左下角的 1，没有与其它 1 相连，所以单独输出
+                {(1, 0): {(1, 0)}, (2, 0): {(0, 1)}, (2, 1): {(-1, 0)}, (1, 1): {(0, -1)}}   # 右上角的 1，没有与其它 1 相连，所以单独输出
+                ]
+            }
+        """
+
+        # 以左上角为原点为元素顶点建立坐标系
+        # 每个地皮元素 顶点 自其自身左上角顺时针排序为 (0, 0), (1, 0), (1, 1), (0, 1)
+        # 每条地皮元素 边缘 自其自身左上角顺时针排序为（不分方向） [(0, 0), (1, 0)], [(1, 0), (1, 1)], [(1, 1), (0, 1)], [(0, 1), (0, 0)]
+        # 根据邻接元素的位置，先列出对应关系  出现环形图案时，内外连线方向一致会有问题，可以处理，但不必要，svg 的 fill-rule evenodd 可以解决
+        # 邻接元素的偏移量
+        right = (1, 0)
+        left = (-1, 0)
+        up = (0, -1)
+        down = (0, 1)
+        sides = (up, right, down, left)
+        sides_edge = {
+            # 切换坐标系时的偏移量 以该点为起点的连线
+            up: ((0, 0), (1, 0)),
+            right: ((1, 0), (0, 1)),
+            down: ((1, 1), (-1, 0)),
+            left: ((0, 1), (0, -1)),
+        }
+        # 上面只检查四向的元素，所以仅斜向相接的两块地皮不会被划分到同一个独立区域中，检查八向可以将它们划分在一个区域
+        # 但是循环次数要多一倍，不是很值得
+        # other_sides = (
+        #     (1, -1),  # right up
+        #     (1, 1),  # right down
+        #     (-1, -1),  # left up
+        #     (-1, 1),  # left down
+        # )
+
+        #           |列表中每个字典代表一块独立区域|
+        # {地皮编号: [{顶点坐标: {出边向量, }, }, ], }
+        all_tile_info: dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]] = {}
+
+        queue = deque()
+
+        # 令下标(-1)与(w+1)/(h+1)可被正常访问，并返回一个不会与地皮相同的值。
+        # 与visited一起使用，免去判断是否下标越界，提高效率 可以省去接近 w * h * 4 * 4 次比较运算
+        map_data_padding = [*[i + [None] for i in self.map_data], [None] * (self.width + 1)]
+
+        # 初始值设为 False。额外添加的值设为 True，避免检查
+        visited = [*[[False] * self.width + [True] for _ in range(self.height)], [True] * (self.width + 1)]
+
+        # ehx, ehy -> element_header_x, element_header_y
+        # for ehx, col in enumerate(self.map_data):
+        for ehy, col in enumerate(self.map_data):
+            # for ehy, tile_code in enumerate(col):
+            for ehx, tile_code in enumerate(col):
+
+                # if visited[ehx][ehy]:
+                if visited[ehy][ehx]:
+                    continue
+
+                # print(f'out add {(ex, ey)} {tile_code=}')
+
+                queue.append((ehx, ehy))
+                # visited[ehx][ehy] = True
+                visited[ehy][ehx] = True
+
+                if tile_code not in all_tile_info:
+                    all_tile_info[tile_code] = []
+
+                all_tile_info[tile_code].append(single_tile_info := {})
+
+                # ex, ey -> element_x, element_y
+                while queue:
+                    ex, ey = queue.pop()
+                    # print(f'check {(px, py)}')
+
+                    # 判断四个方向上是否需要添加边缘与检查
+                    # eox, eoy -> element_offset_x, element_offset_y  邻接元素的偏移量
+                    # nx, ny   -> neighbor_x, neighbor_y              邻接元素坐标
+                    for eox, eoy in sides:
+                        nx, ny = ex + eox, ey + eoy
+
+                        # 邻接元素有 3 种情况，超出地图、与目标相同、与目标不同，1、3 需要添加边缘，2 需要检查邻接元素
+                        # 添加了额外的数据使 1、3 具有相同的判断条件
+                        # if map_data_padding[nx][ny] == tile_code:
+                        if map_data_padding[ny][nx] == tile_code:
+                            # if visited[nx][ny]:
+                            if visited[ny][nx]:
+                                continue
+
+                            # print(f'in add {(nx, ny)} {tile_code=}')
+                            queue.append((nx, ny))
+                            # visited[nx][ny] = True
+                            visited[ny][nx] = True
+                            continue
+
+                        # 情况 2
+                        # vox, voy -> vertex_offset_x, vertex_offset_y    元素坐标转换顶点坐标的偏移量
+                        (vox, voy), direction_vector = sides_edge[(eox, eoy)]
+
+                        # 根据 offset 在对应位置添加边缘
+                        start = ex + vox, ey + voy
+
+                        if start not in single_tile_info:
+                            single_tile_info[start] = set()
+
+                        single_tile_info[start].add(direction_vector)
+
+        return all_tile_info
+
+    @staticmethod
+    def _attach(rounts: list[list[tuple[int, int]]]) -> list[tuple[int, int]]:
+        """独立区域可能包含多条边缘，比如环形区域有内边缘与外边缘
+        将这些边缘合并为一条
+        做法是 随机选一条作为主路径，将其封闭，再将其它路径添加在后面，然后回到主路径起点，继续连接下一条路径"""
+        main_rount = max(rounts, key=lambda _: len(_))
+        for rount in rounts:
+            if rount is main_rount:
+                continue
+            mx, my = main_access = main_rount[0]
+            access_index = 0
+            for i, (px, py) in enumerate(rount):
+                # 保证连线不是水平或竖直，一般情况无意义，是为了处理成 svg 路径时方便判断使用 M 命令，避免出现连线
+                if mx != px and my != py:
+                    access_index = i
+                    break
+            # [main_start, main_..., main_end] + /
+            # [main_start, *rount[access_index:], *rount[:access_index], rount[access_index], main_start]
+            if main_access != main_rount[-1]:
+                main_rount.append(main_access)
+            main_rount.extend(rount[access_index:])
+            main_rount.extend(rount[:access_index + 1])
+            # main_rount.append(main_access)
+
+        return main_rount
+
+    @staticmethod
+    def _classify(links: dict[tuple[int, int], set[tuple[int, int]]]) -> list[list[tuple[int, int]]]:
+        """通过传入的图的数据，将其中的通路连接起来并返回"""
+        rounts = []
+
+        def choose_start():
+            # 选择某条连线的某个端点作为startpoint
+            # 入度：以该顶点为终点的连线的数量；出度：以该顶点为起点的连线的数量
+            # 点共有三种情况
+            #   1 在连线中间，入度为 1，出度为 1，两条连线同向；
+            #   2 在连线一端，入度为 1，出度为 1，两条连线反向；
+            #   3 在连线一端，入度为 2，出度为 2，入的两条连线反向，出的两条连线反向。
+            #                    ↑           ↑
+            # eg: 1. → * →    2. * ←    3. → * ←
+            #                                ↓
+            # 所以 出度为 2 时，是 3；出度为 1 时，根据出入的连线方向确定是 1 或 2
+            # 2 满足要求的点，返回
+            # 1, 3 在出的连线中选择一条继续走，直到到达 2 的状态
+            start_x, start_y = next(iter(links))
+            current_direction = None
+
+            # 寻找当前点的入边方向
+            for direction_x, direction_y in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                pre_point = start_x + direction_x, start_y + direction_y
+
+                if pre_point not in links:
+                    continue
+
+                pre_direction = -direction_x, -direction_y
+                if pre_direction in links[pre_point]:
+                    current_direction = pre_direction
+                    break
+
+            while True:
+                next_directions = links[(start_x, start_y)]
+
+                next_direction = next_directions.copy().pop()
+                match len(next_directions):
+                    case 1:
+                        if next_direction == current_direction:
+                            # 情况1
+                            start_x, start_y = start_x + next_direction[0], start_y + next_direction[1]
+                            continue
+                        # 情况 2
+                        return start_x, start_y
+                    case 2:
+                        # 情况 3
+                        start_x, start_y = start_x + next_direction[0], start_y + next_direction[1]
+                        current_direction = next_direction
+                    case _:
+                        raise
+
+        while links:
+            start = choose_start()
+
+            rounts.append(rount := [start])
+
+            next_point = start
+
+            while True:
+                # print(f'{next_point=} {start=}')
+                current = next_point
+
+                direction = links[current].pop()
+                if not links[current]:
+                    links.pop(current)
+
+                next_point = current[0] + direction[0], current[1] + direction[1]
+
+                if next_point == start:
+                    break
+
+                if next_point not in links:
+                    raise ValueError(f'连线不能形成回路，{next_point=}, {links=}')
+
+                if direction not in links[next_point]:
+                    rount.append(next_point)
+        return rounts
+
+    def convert_path(self) -> dict[int, list[str]]:
+        """将路径转为 svg 的 path 元素的 d 属性值，出现嵌套时需搭配 fill-rule evenodd 正确显示"""
+        for ele_id, single_edges in self.edges.items():
+            self.paths[ele_id] = (single_paths := [])
+            for edge in single_edges:
+                path = []
+                edge_iter = iter(edge)
+                # s -> start
+                sx, sy = edge_iter.__next__()
+                path.append(f'M{sx} {sy}')
+                for x, y in edge_iter:
+                    if sx == x:
+                        command, offset, sy = 'v', y - sy, y
+                    elif sy == y:
+                        command, offset, sx = 'h', x - sx, x
+                    else:
+                        command, offset = 'M', f'{x} {y}'
+                        sx, sy = x, y
+                        # print('注意：两点不在同行或同列')
+                    path.append(f'{command}{offset}')
+                path.append(f'Z')
+                single_paths.append(''.join(path))
+
+        return self.paths
+
+
 class Map:
-    colors = {
-        'TEST': 'orange',  # 测试用途
-
-        'IMPASSABLE': '#000000',
-        'ROAD': '#D1AE6E',
-        'ROCKY': '#C2A163',
-        'DIRT': '#F4CC80',
-        'SAVANNA': '#DBA545',
-        'GRASS': '#C7BD51',
-        'FOREST': '#7D8146',
-        'MARSH': '#836549',
-        'WEB': '#000000',
-        'WOODFLOOR': '#AE894A',
-        'CARPET': '#B57647',
-        'CHECKER': '#CE9E60',
-        'CAVE': '#A48F63',
-        'FUNGUS': '#57625F',
-        'SINKHOLE': '#8C863C',
-        'UNDERROCK': '#715E42',
-        'MUD': '#8B5F2F',
-        'BRICK': '#77734F',
-        'BRICK_GLOW': '#787450',
-        'TILES': '#6C4643',
-        'TILES_GLOW': '#6E4744',
-        'TRIM': '#473A2F',
-        'TRIM_GLOW': '#6E4744',
-        'FUNGUSRED': '#9A6647',
-        'FUNGUSGREEN': '#69623A',
-        'DECIDUOUS': '#A8784C',
-        'DESERT_DIRT': '#E1B863',
-        'SCALE': '#5C4929',
-        'LAVAARENA_FLOOR': '#78270F',
-        'LAVAARENA_TRIM': '#78270F',
-        'QUAGMIRE_PEATFOREST': '#A0845A',
-        'QUAGMIRE_PARKFIELD': '#A4754A',
-        'QUAGMIRE_PARKSTONE': '#E7B879',
-        'QUAGMIRE_GATEWAY': '#8B853B',
-        'QUAGMIRE_SOIL': '#5A4429',
-        'QUAGMIRE_CITYSTONE': '#DBB773',
-        'PEBBLEBEACH': '#C0AD6B',
-        'METEOR': '#8AA36D',
-        'SHELLBEACH': '#C0AD6B',
-        'ARCHIVE': '#906137',
-        'FUNGUSMOON': '#59523A',
-        'FARMING_SOIL': '#554127',
-
-        'OCEAN_COASTAL': '#2E464E',
-        'OCEAN_COASTAL_SHORE': '#2F464D',
-        'OCEAN_SWELL': '#27354B',
-        'OCEAN_ROUGH': '#2B2838',
-        'OCEAN_BRINEPOOL': '#3E6467',
-        'OCEAN_BRINEPOOL_SHORE': '#2F464D',
-        'OCEAN_HAZARDOUS': '#1B181C',
-        'OCEAN_WATERLOG': '#3A6165',
-
-        'MONKEY_GROUND': '#BBA969',
-        'MONKEY_DOCK': '#85664B',
-        'MOSAIC_GREY': '#47362A',
-        'MOSAIC_RED': '#702D2E',
-        'MOSAIC_BLUE': '#46312D',
-        'CARPET2': '#34171E',
-    }
-
     svg_colors = [
         "aliceblue",
         "antiquewhite",
@@ -310,6 +571,171 @@ class Map:
         "yellowgreen",
     ]
 
+    svg_attr_common = {
+        'stroke-width': '0',
+        'stroke-linejoin': "round",
+        'stroke-linecap': "round",  # butt round square  无 圆角 方角
+    }
+
+    def __init__(self, map_data: list[Union[int, Union[list[int], tuple[int]]]], width: int = None, height: int = None,
+                 is_flipped: bool = False):
+        self.width: int = 0
+        self.height: int = 0
+
+        self.map_data: list[[list[int]]] = map_data
+
+        self._format_data(width, height)
+
+        path = Path()
+        self.edges = path.load_map(self.map_data, is_flipped)
+        self.paths = path.convert_path()
+
+        self.svg: Svg = Svg(width=self.width, height=self.height, **self.svg_attr_common)
+        self._root: et.Element = self.svg.root
+        self._g: dict[int, et.Element] = self.svg.g
+
+    def _format_data(self, width: int = None, height: int = None):
+        if not self.map_data:
+            raise ValueError('传入地图数据为空')
+        if isinstance(self.map_data[0], int):
+            map_data_len = len(self.map_data)
+            if width is None:
+                if height is None:
+                    width = height = int(map_data_len ** 0.5)
+                    if width * height != map_data_len:
+                        raise ValueError(
+                            f'未传入宽高，且 map_data 表示的地图不是正方形 {width=} {height=} {map_data_len=}')
+                else:
+                    width = map_data_len // height
+            if height is None:
+                height = map_data_len // width
+            if width * height != map_data_len:
+                raise ValueError(f'宽高数据与 map_data 表示的地图不符 {width} x {height} != {len(self.map_data)}')
+            self.width = width
+            self.height = height
+            self.map_data = [self.map_data[i * self.height: (i + 1) * self.height] for i in range(self.width)]
+        elif isinstance(self.map_data[0], (list, tuple)):
+            self.width = len(self.map_data[0])
+            self.height = len(self.map_data)
+
+            if (width or height) and (self.width != width or self.height != height):
+                log.warning(f'传入宽高 {width=}, {height=} 与图数据不符，已更正为 width={self.width}, height={self.height}')
+        else:
+            raise TypeError('传入地图数据格式错误')
+
+    def get_priority(self):
+        # 根据地皮优先级列表，首先生成低优先级的，再生成高优先级的覆盖，用来实现不同优先级地皮间的覆盖效果
+        return sorted(list(self.paths))
+
+    def get_tile_names(self):
+        return {i: str(i) for i in self.get_priority()}
+
+    def get_tile_colors(self):
+        tile_colors = {}
+        colors = []
+        for tile_code in self.paths:
+            if not colors:
+                colors = self.svg_colors.copy()
+                shuffle(colors)
+            tile_colors[tile_code] = colors.pop()
+
+        return tile_colors
+
+    def save(self, save_path: str = 'map', get_io=False):
+        tile_list = self.get_priority()
+        tile_names = self.get_tile_names()
+        tile_colors = self.get_tile_colors()
+
+        for tile_code in tile_list:
+            tile_name = tile_names[tile_code]
+            if tile_name not in self._g:
+                color = tile_colors.get(tile_name)
+                # 通过边框实现地皮优先级覆盖会导致图形合并时连接的线也有边框，连接时避免同行同列，通过 M 命令连接可以避免
+                self._g[tile_name] = et.SubElement(
+                    self._root, 'g', {'id': f'g_{tile_name}',
+                                      'stroke': color,
+                                      # 'stroke-width': '0.25',  # 迁移到 svg 属性
+                                      # 'stroke-linecap': "round",  # 迁移到 svg 属性
+                                      # "stroke-linejoin": "round",  # 迁移到 svg 属性
+                                      'fill': color})
+            for path in self.paths[tile_code]:
+                et.SubElement(self._g[tile_name], 'path', {'d': path})
+
+        # 中心点
+        # cx, cy = (self.width - 1) / 2 + 1, (self.height - 1) / 2 + 1
+        # et.SubElement(self.root, 'path', {'stroke': 'red', 'stroke-width': '2', 'd': f'M{cx} {cy}Z'})
+
+        return self.svg.save(save_path, get_io)
+
+
+class Tiles(Map):
+    svg_attr_common = {
+        'stroke-width': '0.3',
+        'stroke-linejoin': "round",
+        'stroke-linecap': "round",  # butt round square  无 圆角 方角
+    }
+    colors = {
+        'TEST': 'orange',  # 测试用途
+
+        'IMPASSABLE': '#000000',
+        'ROAD': '#D1AE6E',
+        'ROCKY': '#C2A163',
+        'DIRT': '#F4CC80',
+        'SAVANNA': '#DBA545',
+        'GRASS': '#C7BD51',
+        'FOREST': '#7D8146',
+        'MARSH': '#836549',
+        'WEB': '#000000',
+        'WOODFLOOR': '#AE894A',
+        'CARPET': '#B57647',
+        'CHECKER': '#CE9E60',
+        'CAVE': '#A48F63',
+        'FUNGUS': '#57625F',
+        'SINKHOLE': '#8C863C',
+        'UNDERROCK': '#715E42',
+        'MUD': '#8B5F2F',
+        'BRICK': '#77734F',
+        'BRICK_GLOW': '#787450',
+        'TILES': '#6C4643',
+        'TILES_GLOW': '#6E4744',
+        'TRIM': '#473A2F',
+        'TRIM_GLOW': '#6E4744',
+        'FUNGUSRED': '#9A6647',
+        'FUNGUSGREEN': '#69623A',
+        'DECIDUOUS': '#A8784C',
+        'DESERT_DIRT': '#E1B863',
+        'SCALE': '#5C4929',
+        'LAVAARENA_FLOOR': '#78270F',
+        'LAVAARENA_TRIM': '#78270F',
+        'QUAGMIRE_PEATFOREST': '#A0845A',
+        'QUAGMIRE_PARKFIELD': '#A4754A',
+        'QUAGMIRE_PARKSTONE': '#E7B879',
+        'QUAGMIRE_GATEWAY': '#8B853B',
+        'QUAGMIRE_SOIL': '#5A4429',
+        'QUAGMIRE_CITYSTONE': '#DBB773',
+        'PEBBLEBEACH': '#C0AD6B',
+        'METEOR': '#8AA36D',
+        'SHELLBEACH': '#C0AD6B',
+        'ARCHIVE': '#906137',
+        'FUNGUSMOON': '#59523A',
+        'FARMING_SOIL': '#554127',
+
+        'OCEAN_COASTAL': '#2E464E',
+        'OCEAN_COASTAL_SHORE': '#2F464D',
+        'OCEAN_SWELL': '#27354B',
+        'OCEAN_ROUGH': '#2B2838',
+        'OCEAN_BRINEPOOL': '#3E6467',
+        'OCEAN_BRINEPOOL_SHORE': '#2F464D',
+        'OCEAN_HAZARDOUS': '#1B181C',
+        'OCEAN_WATERLOG': '#3A6165',
+
+        'MONKEY_GROUND': '#BBA969',
+        'MONKEY_DOCK': '#85664B',
+        'MOSAIC_GREY': '#47362A',
+        'MOSAIC_RED': '#702D2E',
+        'MOSAIC_BLUE': '#46312D',
+        'CARPET2': '#34171E',
+    }
     priority = {
         'INVALID': -1,
         'IMPASSABLE': 0,
@@ -368,7 +794,6 @@ class Map:
         'LAVAARENA_TRIM': 53,
         'LAVAARENA_FLOOR': 54,
     }
-
     tiles_cache = {
         0: 'TEST',
         1: 'IMPASSABLE',
@@ -430,428 +855,37 @@ class Map:
         65535: 'INVALID',
     }
 
-    def __init__(self, data_type: str = 'tiles', map_data: iter = None, world_tiles: dict = None, width: int = None, height: int = None,
-                 bg_tile: int = 1):
-        # map 相关
-        self.data_type = data_type
-        self.width = width
-        self.height = height
-        self.background_tile = bg_tile
-        self.tile_codes: set = ...
-        self.world_tiles: dict[str, int] = ...
-        self.tiles: list[list[int]] = ...
+    def __init__(self, map_data: list[Union[int, Union[list[int], tuple[int]]]], tile_id_name: dict = None, is_flipped: bool = True):
+        super().__init__(map_data, is_flipped=is_flipped)
 
-        # svg 相关
-        self.svg: Svg = ...
-        self.root: et.Element = ...
-        self.g: dict[int:et.Element] = ...
-
-        # path 相关
-        self.paths: Paths = ...
-
-        if map_data:
-            self.load_map_data(map_data, world_tiles, width, height)
-
-    def _init(self, map_data: list, world_tiles: dict = None, width: int = None, height: int = None):
-        """
-        map_data 一维列表，数据需要是从左上角开始，由上至下，由左至右存入列表的（饥荒地图数据存储方式）
-                 二维列表，数据需要是 列表长度为 width，子列表长度为 height 的二维列表
-        """
-
-        if not map_data:
-            raise ValueError('传入地图数据为空')
-        if isinstance(map_data[0], int):
-            map_data_len = len(map_data)
-            if width is None:
-                if height is None:
-                    width = height = int(map_data_len ** 0.5)
-                    if width * height != map_data_len:
-                        raise ValueError(f'未传入宽高，且 map_data 表示的地图不是正方形 {width=} {height=} {map_data_len=}')
-                else:
-                    width = map_data_len // height
-            if height is None:
-                height = map_data_len // width
-            if width * height != map_data_len:
-                raise ValueError(f'宽高数据与 map_data 表示的地图不符 {width} x {height} != {len(map_data)}')
-            self.width = width
-            self.height = height
-            self.tile_codes = set(map_data)
-            self.tiles = tuple(map_data[i * self.height: (i + 1) * self.height] for i in range(self.width))
-        elif isinstance(map_data[0], (list, tuple)):
-            self.width = len(map_data)
-            self.height = len(map_data[0])
-            self.tile_codes = set(chain(*map_data))
-            self.tiles = map_data
+        if tile_id_name is not None:
+            self.tile_names = {j: i for i, j in tile_id_name.items()}
         else:
-            raise TypeError('传入地图数据格式错误')
-
-        if not world_tiles:
             log.warning('未传入地皮名与地皮编号对应的关系，将使用预存的对应关系，对应关系并不一定准确')
-            self.world_tiles = self.tiles_cache
-        else:
-            self.world_tiles = {j: i for i, j in world_tiles.items()}
+            self.tile_names = self.tiles_cache
 
-        path_attr_common = {
-            'stroke-width': '0.3' if self.data_type == 'tiles' else '0',
-            'stroke-linejoin': "round",
-            'stroke-linecap': "round",  # butt round square  无 圆角 方角
-        }
+    def get_tile_names(self):
+        for i in self.paths:
+            if i not in self.tile_names:
+                self.tile_names[i] = str(i)
+        return self.tile_names
 
-        self.svg: Svg = Svg(width=str(self.width), height=str(self.height), **path_attr_common)
-        self.root: et.Element = self.svg.root
-        self.g: dict[int:et.Element] = self.svg.g
+    def get_tile_colors(self):
+        colors = []
+        tile_names = self.get_tile_names()
+        for i in self.paths:
+            i = tile_names[i]
+            if i not in self.colors:
+                if not colors:
+                    colors = self.svg_colors.copy()
+                    shuffle(colors)
+                color = colors.pop()
+                log.warning(f'{i} 没有对应的颜色，已选取随机颜色：{color}')
+                self.colors[str(i)] = color
+        return self.colors
 
-    def load_map_data(self, map_data: list, world_tiles: dict = None, width: int = None, height: int = None) -> None:
-        self._init(map_data, world_tiles, width, height)
-
-        # 根据地图数据构造对应的 Paths
-        self.paths = Paths(self.tile_codes, self.background_tile)
-        if self.background_tile in self.tile_codes:
-            self.paths.paths[self.background_tile] = [f'M0 0h{self.width}v{self.height}h-{self.width}Z']
-
-        # add_point = True
-        add_point = False
-        add_line = not add_point
-
-        if add_point:
-            paths = self.paths
-            for row, line_tiles in enumerate(self.tiles):
-                for col, tile_code in enumerate(line_tiles):
-                    paths.add_point((row, col), tile_code)
-            paths.merge_point()
-
-        if add_line:
-            temp_col, temp_tile = None, None
-            max_col = self.height - 1
-            for row, line_tiles in enumerate(self.tiles):
-                for col, tile_code in enumerate(line_tiles):
-                    if col == 0:
-                        temp_col, temp_tile = col, tile_code
-                    elif tile_code != temp_tile:
-                        self.paths.add_line(temp_tile, row, temp_col, col - 1)
-                        temp_col, temp_tile = col, tile_code
-                        if col == max_col:
-                            self.paths.add_line(temp_tile, row, col, col)
-                    elif col == max_col:
-                        self.paths.add_line(temp_tile, row, temp_col, col)
-            self.paths.merge_line()
-
-    def save(self, save_path: str = 'map', get_io=False):
-        if self.data_type == 'tiles':
-            # 根据地皮优先级列表，首先生成低优先级的，再生成高优先级的覆盖，用来支持不同优先级地皮间的覆盖效果
-            tile_list = sorted(self.tile_codes, key=lambda x: self.priority.get(self.world_tiles.get(x), 0))
-        else:
-            tile_list = sorted(self.tile_codes)
-        paths = self.paths.paths
-
-        colors = self.svg_colors.copy()
-        for tile_code in tile_list:
-            path_list = paths[tile_code]
-            if (self.data_type == 'tiles' or self.data_type == 'nodeidtilemap') and tile_code in self.world_tiles:
-                tile_name = self.world_tiles[tile_code]
-            else:
-                tile_name = tile_code
-            if tile_name not in self.g:
-                color = self.colors.get(tile_name)
-                if color is None:
-                    if tile_name == self.background_tile:
-                        color = 'black'
-                    else:
-                        if not colors:
-                            colors = self.svg_colors.copy()
-                        color = colors[randint(0, len(colors) - 1)]
-                        colors.remove(color)
-                        print(f'{tile_name} 没有对应的颜色，已随机选取颜色：{color}')
-                # 通过边框实现地皮优先级覆盖会导致图形合并时连接的线也有边框，连接时避免同行同列，通过 M 命令连接可以避免
-                self.g[tile_name] = et.SubElement(
-                    self.root, 'g', {'id': f'g_{tile_name}',
-                                     'stroke': color,
-                                     # 'stroke-width': '0.25',  # 迁移到 svg 属性，在 self.init 中
-                                     # 'stroke-linecap': "round",  # 迁移到 svg 属性，在 self.init 中
-                                     # "stroke-linejoin": "round",  # 迁移到 svg 属性，在 self.init 中
-                                     'fill': color})
-            for path in path_list:
-                et.SubElement(self.g[tile_name], 'path', {'d': path})
-
-        # cx, cy = (self.width - 1) / 2 + 1, (self.height - 1) / 2 + 1
-        # et.SubElement(self.root, 'path', {'stroke': 'red', 'stroke-width': '2', 'd': f'M{cx} {cy}Z'})
-
-        return self.svg.save(save_path, get_io)
-
-
-class Paths:
-    def __init__(self, tile_codes: set[int], ignore_tile: int = None):
-        self.tile_codes: set = tile_codes.copy()
-        if ignore_tile is not None:
-            self.tile_codes.discard(ignore_tile)
-        self._ignore_tile: int = ignore_tile
-
-        self._path_points: dict[int, list[tuple[int, int]]] = {tile_code: [] for tile_code in self.tile_codes}
-        self._path_links: dict[int, dict[int, list[tuple[int, int]]]] = {tile_code: {} for tile_code in self.tile_codes}
-
-        self._edges: dict[int, list[list[tuple[int, int]]]] = {tile_code: [] for tile_code in self.tile_codes}
-        self.paths: dict[int, list[str]] = {tile_code: [] for tile_code in self.tile_codes}
-
-    def add_point(self, pos: tuple[int, int], tile_code: int):
-        if tile_code == self._ignore_tile:
-            return
-        self._path_points[tile_code].append(pos)
-
-    def add_line(self, tile_code: int, row: int, col_start: int, col_end: int):
-        if tile_code == self._ignore_tile:
-            return
-        tile_links = self._path_links[tile_code]
-        if row not in tile_links:
-            tile_links[row] = []
-        tile_links[row].append((col_start, col_end))
-
-    def merge_line(self):
-        """通过添加的连线集，绘制这些点的组成形状的边缘。同种地皮的独立区块会被分配到单独的 path 中"""
-
-        def line_links(row_, col_start_, col_end_):
-            row_right_ = row_ + 1
-            col_down_ = col_end_ + 1
-            link_top_ = (row_, col_start_), (row_right_, col_start_)
-            link_down_ = (row_, col_down_), (row_right_, col_down_)
-            links_left_ = (((row_, col_), (row_, col_ + 1)) for col_ in range(col_start_, col_down_))
-            links_right_ = (((row_right_, col_), (row_right_, col_ + 1)) for col_ in range(col_start_, col_down_))
-            return {link_top_, link_down_, *links_left_, *links_right_}
-
-        graphs: dict[int, list[set[tuple[tuple[int, int], tuple[int, int]]]]] = {tile_code: [] for tile_code in self.tile_codes}
-        for tile_code, tile_links in self._path_links.items():
-            if not tile_links:
-                continue
-            graphs_tile = graphs[tile_code]
-            # gtis -> graphs_tile_indexs  通过该索引访问 graphs_tile。
-            # 每列的图形通过 gtii_rows{row: gtii_row} 访问gti，以避免修改对应关系时需要遍历修改 相较于不使用该索引，效率高很多
-            gtis = []
-            gtii_rows: dict[int, list[int]] = {row: [] for row in tile_links}
-
-            # 从小到大遍历每列，将未与前一列图形连接的图形作为新的记录图形存到列表中。相连接的则并入前一个图形，
-            for row in sorted(tile_links):
-                pre_row = row - 1
-                gtii_row = gtii_rows[row]
-                if pre_row not in tile_links:
-                    # 不需要判断是否与前列相接
-                    for ls, le in tile_links[row]:
-                        new_graph = line_links(row, ls, le)
-                        gtii_row.append(len(gtis))
-                        gtis.append((len(graphs_tile)))
-                        graphs_tile.append(new_graph)
-                    continue
-
-                pre_gtii_row = gtii_rows[pre_row]
-                for ls, le in tile_links[row]:
-                    new_graph = line_links(row, ls, le)
-
-                    linked_gtiis = tuple((i, pre_gtii_row[i]) for i, (ps, pe) in enumerate(tile_links[pre_row])
-                                         # if not (le < ps or ls > pe))  # 代表  横、纵  向有连接时合并
-                                         if not (le < ps - 1 or ls > pe + 1)  # 代表  横、纵、斜  向有连接时合并
-                                         )
-
-                    if linked_gtiis:
-                        # 与前一列的图形相连，将该图形并入相连的图形
-                        linked = tuple((i, gtii, gtis[gtii], graphs_tile[gtis[gtii]]) for i, gtii in linked_gtiis)
-                        if len(linked) == 1:
-                            _, main_gtii, main_gti, main_graph = linked[0]
-                            main_graph ^= new_graph
-                            gtii_row.append(main_gtii)
-                            continue
-
-                        _, main_gtii, main_gti, main_graph = max(linked, key=lambda x: len(x[3]))
-
-                        main_graph ^= new_graph
-
-                        # gtii_row 添加 main_graph 的索引的索引
-                        gtii_row.append(main_gtii)
-
-                        # 如果相连的不止一个，将其它项合并到 main_graph，清空其它项，并替换为 main_graph
-                        for other_index, other_gtii, other_gti, other_graph in linked:
-                            if other_graph is main_graph:
-                                continue
-
-                            # 合并到 main_graph
-                            main_graph ^= other_graph
-                            # 将 graphs_tile 中此项清空，后期过滤掉
-                            other_graph.clear()
-                            # gtis 中该项替换为 main_gti
-                            for i, gti in enumerate(gtis):
-                                if gti == other_gti:
-                                    gtis[i] = main_gti
-                        continue
-
-                    # print(f'create new graph: row({row}) col({ls}~{le})')
-                    # 未与前一列图形相连，创建新的图形（由links构成），并将该图形添加到 gtis gtii_rows 中用来记录
-                    # [link_top(1), link_down(1), *links_left(end - start + 1), *links_right(end - start + 1)]
-                    # links 是有可能与其它元素重合的，重合说明是在图形内部，合并时会删掉，剩余的是该图形的边界
-                    gtii_row.append(len(gtis))
-                    gtis.append((len(graphs_tile)))
-                    graphs_tile.append(new_graph)
-
-        for tile_code, graphs_tile in graphs.items():
-            for graph in graphs_tile:
-                if not graph:
-                    # 跳过空项。上面合并图形时，被清空的附属图形
-                    continue
-                # 一种地皮可能存在多个独立的区块，每个区块都单独处理
-                self._merge_area(tile_code, graph)
-
-        self.convert_path()
-
-    def merge_point(self):
-        """通过添加的点集，绘制这些点组成形状的边缘。同一地皮的所有区块都会被合并在一个 path 中"""
-        links_all: dict[int, set] = {tile_code: set() for tile_code in self.tile_codes}
-        # p -> point
-        for tile_code in self._path_points:
-            links_tile = links_all[tile_code]
-            for x, y in self._path_points[tile_code]:
-                # 按由上向下、由左向右的规则描出每块地皮的边缘，舍去重复的，就只剩小方块组成的大图形的边缘了
-                p0, p1, p2, p3 = (x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)
-                links_tile ^= {(p0, p1), (p1, p3), (p0, p2), (p2, p3)}
-
-            if not links_tile:
-                continue
-
-            self._merge_area(tile_code, links_tile)
-
-        self.convert_path()
-
-    @staticmethod
-    def _simple_link(single_tile: list[list[bool]]):
-        """遍历每个元素，根据其四向环境判断是否在四边绘制  比较慢"""
-
-        h = len(single_tile)
-        w = len(single_tile[0]) if single_tile else 0
-
-        links = []
-
-        # 以左上角为原点为元素顶点建立坐标系
-        # 每个地皮元素顶点自其自身左上角顺时针排序为 (0, 0), (1, 0), (1, 1), (0, 1)
-        # 每条地皮元素边缘自其自身左上角顺时针排序为（不分方向） [(0, 0), (1, 0)], [(1, 0), (1, 1)], [(1, 1), (0, 1)], [(0, 1), (0, 0)]
-        # 根据邻接元素的位置，先列出对应关系  出现环形图案时，内外连线方向一致会有问题，但是无所谓，fill-rule evenodd 会出手
-        top = (0, -1, ((0, 0), (1, 0)))
-        right = (1, 0, ((1, 0), (1, 1)))
-        bottom = (0, 1, ((1, 1), (0, 1)))
-        left = (-1, 0, ((0, 1), (0, 0)))
-        sides = (top, right, bottom, left)
-
-        for ir, row in enumerate(single_tile):
-            for ic, value in enumerate(row):
-                # ir 表示第几行，对应 y 值；ic 表示第几列，对应 x 值
-                if not value:
-                    # 不是待处理的地皮类型
-                    continue
-
-                # 判断四个方向上需不需要添加边缘
-                for x_offset, y_offset, edge in sides:
-                    xn, yn = ic + x_offset, ir + y_offset
-                    if 0 <= xn < w and 0 <= yn < h and single_tile[yn][xn]:
-                        # 邻接元素有 3 种情况，超出地图、与目标相同、与目标不同，1、3 需要添加边缘，2 不需要，所以跳过
-                        continue
-
-                    # 根据 edge 在对应位置添加边缘
-                    start_offset, end_offset = edge
-                    start = (start_offset[0] + ic, start_offset[1] + ir)
-                    end = (end_offset[0] + ic, end_offset[1] + ir)
-                    links.append((start, end))
-
-        return links
-
-    def _merge_area(self, tile_code: int, links_tile: set[tuple[tuple[int, int], tuple[int, int]]]):
-        def vector_difference(p0_, p1_):
-            return p0_[0] - p1_[0], p0_[1] - p1_[1]
-
-        # links_tile 是分段的形状的边缘，每段方向都是由上向下或由左向右  下一步是通过这些散落的线段，获取有序的边缘上的点
-        # 由于当前线段都是自上向下，自左向右，为了可以形成环，把翻转后的线段一起纳入
-        links = links_tile | {(i[1], i[0]) for i in links_tile}
-        rounts = []
-        while links:
-            # p -> point, ps -> point_start, pe -> point_end
-            p0, p1 = links.pop()
-            links.remove((p1, p0))
-            rount = [p0]
-            rounts.append(rount)
-
-            ps = p0
-            # p0 为 rount 的起点，p1 为 oldlink 的终点，newlink 的起点
-            while p0 != p1:
-                # 以 p1 为新的起点，向四个方向寻找存在的 link
-                rount.append(p1)
-                sx, sy = p1
-                for pe in ((sx + 1, sy), (sx - 1, sy), (sx, sy + 1), (sx, sy - 1)):
-                    if pe == ps:
-                        continue
-                    if (p1, pe) in links:
-                        links.remove((p1, pe))
-                        links.remove((pe, p1))
-                        ps, p1 = p1, pe
-                        break
-
-        # 删去线段中无用的中间点
-        better_rounts = []
-        for rount in rounts:
-            tmp_rount, pre_diff = [], vector_difference(rount[-1], rount[0])
-            better_rounts.append(tmp_rount)
-            for point0, point1 in zip(rount, [*rount[1:], rount[0]]):
-                diff = vector_difference(point0, point1)
-                if diff != pre_diff:
-                    pre_diff = diff
-                    tmp_rount.append(point0)
-            # 这里本来还应该处理一下第一个点，但是删第一个点应该就比较影响效率了
-
-        # 处理嵌套的图形
-        if len(better_rounts) != 1:
-            # 梳理再连好麻烦，需要多次遍历，感觉效率很低，还是直接连吧，排好序和随便连区别不大
-            main_rount = max(better_rounts, key=lambda x: len(x))
-            for rount in better_rounts:
-                if rount is main_rount:
-                    continue
-                mx, my = main_access = main_rount[0]
-                access_index = 0
-                for i, p in enumerate(rount):
-                    # 保证连线不是水平或竖直，从而在 convert_path 时采用 M 命令，进而避免连线出现边框
-                    if mx != p[0] and my != p[1]:
-                        access_index = i
-                        break
-                # [main_start, main_..., main_end] +
-                # [main_start, *rount[access_index:], *rount[:access_index], rount[access_index], main_start]
-                if main_access is not main_rount[-1]:
-                    main_rount.append(main_access)
-                main_rount.extend(rount[access_index:])
-                main_rount.extend(rount[:access_index + 1])
-                # main_rount.append(main_access)
-            better_rounts = [main_rount]
-
-        self._edges[tile_code].extend(better_rounts)
-
-    def convert_path(self):
-        """转为 svg 的 path 路径字符串"""
-        for tile_code in self.tile_codes:
-            edge_tile = self._edges[tile_code]
-            for edge in edge_tile:
-                path = []
-                edge_iter = iter(edge)
-                # s -> start
-                sx, sy = edge_iter.__next__()
-                path.append(f'M{sx} {sy}')
-                for x, y in edge_iter:
-                    if sx == x:
-                        command, offset, sy = 'v', y - sy, y
-                    elif sy == y:
-                        command, offset, sx = 'h', x - sx, x
-                    else:
-                        command, offset = 'M', f'{x} {y}'
-                        sx, sy = x, y
-                        # print('注意：两点不在同行或同列')
-                    path.append(f'{command}{offset}')
-                path.append(f'Z')
-                self.paths[tile_code].append(''.join(path))
-
-        # print(self.paths)
-
-    def __iter__(self):
-        for tile_code in sorted(self.paths):
-            yield tile_code, self.paths[tile_code]
+    def get_priority(self):
+        return sorted(list(self.paths), key=lambda x: self.priority.get(self.tiles_cache.get(x), 0))
 
 
 def clip_map(map_data, height):
@@ -867,7 +901,7 @@ def clip_map(map_data, height):
 
 
 def test_map():
-    map_data = list(zip(*[
+    map_data = [
         [1, 0, 1, 1, 1, 1],
         [0, 0, 1, 0, 1, 0],
         [1, 1, 1, 0, 1, 0],
@@ -876,9 +910,9 @@ def test_map():
         [1, 1, 1, 0, 1, 0],
         [1, 0, 0, 0, 0, 0],
         [1, 1, 1, 1, 1, 1],
-    ]))
+    ]
     log.info('创建地图实例')
-    map_ = Map('tiles', map_data, bg_tile=0)
+    map_ = Tiles(map_data)
     log.info('保存地图')
     map_.save()
 
@@ -925,7 +959,7 @@ def main():
     start_time = time()
 
     log.info('创建地图实例')
-    map_ = Map(datatype, tile_decode, name_id_map, bg_tile=bg_tile)
+    map_ = Tiles(tile_decode, name_id_map)
     log.info('保存地图')
     map_.save(f'map_{datatype}.svg')
 
@@ -935,6 +969,7 @@ def main():
 if __name__ == '__main__':
     main()
     # test_map()
+    pass
 
 """
 游戏内，地皮坐标轴正向是和地图坐标系一致的，在屏幕逆时针旋转 45° 后，向下是x(0, )的正向，向右是y(, 0)的正向
@@ -947,7 +982,7 @@ if __name__ == '__main__':
 2 以地图中心为原点构建的坐标系，默认上方指向 x, y 轴的负方向
 按 q 将屏幕逆时针旋转 45° 后，左上为地皮原点(0, 0)，  地图中心右下方半个地皮为坐标原点，下方为 x 轴正向，右为 y 轴正向
 
-下方地皮坐标默认以地皮左上角的坐标为坐标，方便换算
+下方地皮坐标默认以地皮左上角的坐标为原点，方便换算
 坐标原点与地皮原点  425*425 坐标原点在 (212, 212)(213, 213) 两块地皮交接处，即 地皮(213, 213)    地皮(0, 0), (424, 424) 对应原点坐标(-852, -852) (844, 844)
 400*400 坐标原点在 (200, 200) 地皮中心   地皮(0, 0), (399, 399) 对应坐标(-802, -802)(794, 794)
 对于 size * size 的地图，地皮(0, 0) 的坐标是(-((size-1)/2+1)*4, -((size-1)/2+1)*4)
