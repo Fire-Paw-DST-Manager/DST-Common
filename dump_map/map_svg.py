@@ -743,6 +743,9 @@ class Map:
 
         self._format_data(width, height)
 
+        if is_flipped:
+            self.width, self.height = self.height, self.width
+
         path = Path()
         self.edges = path.load_map(self.map_data, is_flipped)
         self.paths = path.convert_path()
