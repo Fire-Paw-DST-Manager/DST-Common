@@ -166,9 +166,166 @@ class Path:
 
     def _flip_map(self):
         # 翻转 x, y 轴
-        self.map_data = [[i[x] for i in self.map_data] for x in range(len(self.map_data[0]))]
+        self.map_data = [list(i) for i in zip(*self.map_data)]
 
     def _link_point(self) -> dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]]:
+        """分析传入地图信息，返回每种id的每块独立区域的边缘上的点与它们的出边
+        默认处理正常图，若要处理反转图，可以通过翻转输入
+        或调换函数内关于 self.map_data, map_data_padding, visited 的 x, y 值与 self.width, self.height
+        e.g.
+            self.map_data = [[0, 1],
+                             [1, 0]]
+
+                           |列表中每个字典代表一块独立区域|
+                    {编号: [{顶点坐标: {出边向量, }, }, ], }  # 终点坐标 = 顶点坐标 + 出边向量   存图方式类似邻接表
+            output: dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]] = {
+            0: [
+                {(0, 0): {(1, 0)}, (1, 0): {(0, 1)}, (1, 1): {(-1, 0)}, (0, 1): {(0, -1)}},  # 左上角的 0，没有与其它 0 相连，所以单独输出
+                {(1, 1): {(1, 0)}, (2, 1): {(0, 1)}, (2, 2): {(-1, 0)}, (1, 2): {(0, -1)}}   # 右下角的 0，没有与其它 0 相连，所以单独输出
+                ],
+            1: [
+                {(0, 1): {(1, 0)}, (1, 1): {(0, 1)}, (1, 2): {(-1, 0)}, (0, 2): {(0, -1)}},  # 左下角的 1，没有与其它 1 相连，所以单独输出
+                {(1, 0): {(1, 0)}, (2, 0): {(0, 1)}, (2, 1): {(-1, 0)}, (1, 1): {(0, -1)}}   # 右上角的 1，没有与其它 1 相连，所以单独输出
+                ]
+            }
+
+
+        创建 map_data_padding，在 self.map_data 的基础上，每行每列都在末尾添加 None，这样不需要判断下标是否越界(-1, max + 1)
+        根据 map_data_padding 的大小创建 visited，并将额外添加的元素的位置设置为 True，用于记录哪些元素已经被访问过，避免重复访问
+        遍历二维数组，出现未访问过的元素时，说明有一个未记录的区域，
+            以该元素位置为起点，使用扫描线种子填充算法，寻找与当前元素连通的所有同类型元素，
+            并根据相对位置，将其边缘添加到同一个字典中，
+            遍历完毕时，所有区域应该都已记录
+        """
+
+        # 以左上角为原点为元素顶点建立坐标系
+        # 每个地皮元素 顶点 自其自身左上角顺时针排序为 (0, 0), (1, 0), (1, 1), (0, 1)
+        # 每条地皮元素 边缘 自其自身左上角顺时针排序为（不分方向） [(0, 0), (1, 0)], [(1, 0), (1, 1)], [(1, 1), (0, 1)], [(0, 1), (0, 0)]
+        vector_right = (1, 0)
+        vector_up = (0, -1)
+        vector_left = (-1, 0)
+        vector_down = (0, 1)
+
+        #           |列表中每个字典代表一块独立区域|
+        # {地皮编号: [{顶点坐标: {出边向量, }, }, ], }
+        all_tile_info: dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]] = {}
+
+        queue = deque()
+
+        # 令下标(-1)与(w+1)/(h+1)可被正常访问，并返回一个不会与地皮相同的值。
+        # 与visited一起使用，免去判断是否下标越界，提高效率 可以省去接近 w * h * 4 * 4 次比较运算
+        map_data_padding = [*[i + [None] for i in self.map_data], [None] * (self.width + 1)]
+
+        # 初始值设为 False。额外添加的值设为 True，避免检查
+        visited = [*[[False] * self.width + [True] for _ in range(self.height)], [True] * (self.width + 1)]
+
+        # ehx, ehy -> element_header_x, element_header_y
+        for ehy, col in enumerate(self.map_data):
+            for ehx, tile_code in enumerate(col):
+
+                if visited[ehy][ehx]:
+                    continue
+
+                queue.append((ehx, ehy))
+                visited[ehy][ehx] = True
+
+                if tile_code not in all_tile_info:
+                    all_tile_info[tile_code] = []
+
+                all_tile_info[tile_code].append(single_tile_info := {})
+
+                # ex, ey -> element_x, element_y
+                while queue:
+                    # 两种需要添加边缘的情况
+                    # 1 当前行的最左端与最右端，对应的左右边缘
+                    # 2 遍历上下行时，地皮不同，对应的上下边缘
+
+                    ex, ey = queue.pop()
+
+                    right, left, now = 0, 0, ex
+
+                    while True:
+                        # 向右寻找
+                        now += 1
+
+                        if map_data_padding[ey][now] != tile_code:
+                            # 撞墙，结束
+                            right = now - 1
+
+                            # 添加右边缘，从元素的右上角向下到右下
+                            # current_point = right, ey
+                            start_vertex = right + 1, ey
+                            if start_vertex not in single_tile_info:
+                                single_tile_info[start_vertex] = set()
+                            single_tile_info[start_vertex].add(vector_down)
+                            break
+
+                        # 是相同类型元素，继续走
+                        visited[ey][now] = True
+
+                    # 重置 now 的位置
+                    now = ex
+
+                    while True:
+                        # 向左寻找
+                        now -= 1
+
+                        if map_data_padding[ey][now] != tile_code:
+                            # 撞墙， 结束
+                            left = now + 1
+
+                            # 添加左边缘，从元素的左下向上到左上
+                            # current = left, ey
+                            start_vertex = left, ey + 1
+                            if start_vertex not in single_tile_info:
+                                single_tile_info[start_vertex] = set()
+                            single_tile_info[start_vertex].add(vector_up)
+                            break
+
+                        # 是相同类型元素，继续走
+                        visited[ey][now] = True
+
+                    # 同行遍历完毕，开始遍历上下行
+                    pre_col = (ey - 1, map_data_padding[ey - 1], (0, 0), vector_right)
+                    after_col = (ey + 1, map_data_padding[ey + 1], (1, 1), vector_left)
+                    for next_col_index, next_col_data, offset_element, direction_row_ in (pre_col, after_col):
+
+                        # 标记该元素是否是最右侧相同类型元素，初始为 True，添加元素入队列后设置为 False，遇到其他类型元素时，设置为 True
+                        flag = True
+
+                        for next_element_x in range(right, left - 1, -1):
+                            # 从右至左遍历
+                            if next_col_data[next_element_x] == tile_code:
+                                # 该点是相同类型地皮
+
+                                if visited[next_col_index][next_element_x]:
+                                    # 该点已经处理过，跳过
+                                    continue
+
+                                if flag:
+                                    # 该元素是主行的最左、最右或该点左侧是其它类型地皮，添加到队列中
+                                    queue.append((next_element_x, next_col_index))
+                                    visited[next_col_index][next_element_x] = True
+
+                                    # 标记一下，在遇到不同类型地皮之前，不再将点加入队列
+                                    flag = False
+                                continue
+
+                            # 该点不是相同类型地皮，标记一下，下次遇到相同类型时，应加入队列
+                            if not flag:
+                                flag = True
+
+                            # 地皮类型不同，说明此处应有边缘
+                            # current = next_element_x, ey
+                            start_vertex = next_element_x + offset_element[0], ey + offset_element[1]
+                            # add_edge(start_vertex, direction_row_, single_tile_info)
+                            if start_vertex not in single_tile_info:
+                                single_tile_info[start_vertex] = set()
+                            single_tile_info[start_vertex].add(direction_row_)
+
+        return all_tile_info
+
+    def _link_point_old(self) -> dict[int, list[dict[tuple[int, int], set[tuple[int, int]]]]]:
         """分析传入地图信息，返回每种id的每块独立区域的边缘上的点与它们的出边
         默认处理正常图，若要处理反转图，可以通过翻转输入
         或调换函数内关于 self.map_data, map_data_padding, visited 的 x, y 值与 self.width, self.height
@@ -901,7 +1058,7 @@ def clip_map(map_data, height):
 
 
 def test_map():
-    map_data = [
+    map_data = list(zip(*[
         [1, 0, 1, 1, 1, 1],
         [0, 0, 1, 0, 1, 0],
         [1, 1, 1, 0, 1, 0],
@@ -910,7 +1067,7 @@ def test_map():
         [1, 1, 1, 0, 1, 0],
         [1, 0, 0, 0, 0, 0],
         [1, 1, 1, 1, 1, 1],
-    ]
+    ]))
     log.info('创建地图实例')
     map_ = Tiles(map_data)
     log.info('保存地图')
@@ -927,7 +1084,6 @@ def main():
     # data = load_savedata('./saved_data/0000000002')
 
     datatype = ['tiles', 'nav', 'nodeidtilemap', 'tiledata'][0]
-    bg_tile = {'tiles': 1, 'nav': 0, 'nodeidtilemap': 0, 'tiledata': 0}[datatype]
 
     tile_encode = data['map'][datatype]
 
@@ -967,8 +1123,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # test_map()
+    # main()
+    test_map()
     pass
 
 """
