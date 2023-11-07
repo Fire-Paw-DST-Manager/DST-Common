@@ -3,7 +3,6 @@ import logging as log
 import xml.etree.ElementTree as et
 from collections import deque
 from io import BytesIO
-from json import loads
 from random import shuffle
 from typing import Union
 
@@ -90,7 +89,7 @@ class Svg:
     def creat_group(self, **kwargs) -> et.Element:
         if 'id' not in kwargs:
             for index in range(99999):
-                g_id = f'g{index}'
+                g_id = f'g_{index}'
                 if g_id not in self.g:
                     kwargs['id'] = g_id
         self.g[kwargs['id']] = et.SubElement(self.root, 'g', kwargs)
@@ -751,8 +750,7 @@ class Map:
         self.paths = path.convert_path()
 
         self.svg: Svg = Svg(width=self.width, height=self.height, **self.svg_attr_common)
-        self._root: et.Element = self.svg.root
-        self._g: dict[int, et.Element] = self.svg.g
+        self._g: dict[str, et.Element] = self.svg.g
 
     def _format_data(self, width: int = None, height: int = None):
         if not self.map_data:
@@ -783,21 +781,21 @@ class Map:
         else:
             raise TypeError('传入地图数据格式错误')
 
-    def get_priority(self):
+    def get_priority(self) -> list[int]:
         # 根据地皮优先级列表，首先生成低优先级的，再生成高优先级的覆盖，用来实现不同优先级地皮间的覆盖效果
         return sorted(list(self.paths))
 
-    def get_tile_names(self):
+    def get_tile_names(self) -> dict[int, str]:
         return {i: str(i) for i in self.get_priority()}
 
-    def get_tile_colors(self):
+    def get_tile_colors(self) -> dict[str, str]:
         tile_colors = {}
         colors = []
         for tile_code in self.paths:
             if not colors:
                 colors = self.svg_colors.copy()
                 shuffle(colors)
-            tile_colors[tile_code] = colors.pop()
+            tile_colors[str(tile_code)] = colors.pop()
 
         return tile_colors
 
@@ -808,18 +806,20 @@ class Map:
 
         for tile_code in tile_list:
             tile_name = tile_names[tile_code]
+            g_id = f'g_{tile_name}'
             if tile_name not in self._g:
                 color = tile_colors.get(tile_name)
                 # 通过边框实现地皮优先级覆盖会导致图形合并时连接的线也有边框，连接时避免同行同列，通过 M 命令连接可以避免
-                self._g[tile_name] = et.SubElement(
-                    self._root, 'g', {'id': f'g_{tile_name}',
-                                      'stroke': color,
-                                      # 'stroke-width': '0.25',  # 迁移到 svg 属性
-                                      # 'stroke-linecap': "round",  # 迁移到 svg 属性
-                                      # "stroke-linejoin": "round",  # 迁移到 svg 属性
-                                      'fill': color})
+                self.svg.creat_group(**{
+                    'id': g_id,
+                    'stroke': color,
+                    # 'stroke-width': '0.25',  # 迁移到 svg 属性
+                    # 'stroke-linecap': "round",  # 迁移到 svg 属性
+                    # "stroke-linejoin": "round",  # 迁移到 svg 属性
+                    'fill': color,
+                })
             for path in self.paths[tile_code]:
-                et.SubElement(self._g[tile_name], 'path', {'d': path})
+                et.SubElement(self._g[g_id], 'path', {'d': path})
 
         # 中心点
         # cx, cy = (self.width - 1) / 2 + 1, (self.height - 1) / 2 + 1
@@ -1047,88 +1047,6 @@ class Tiles(Map):
     def get_priority(self):
         return sorted(list(self.paths), key=lambda x: self.priority.get(self.tiles_cache.get(x), 0))
 
-
-def clip_map(map_data, height):
-    test_tile = None
-    row__start, row__end = 0, 92
-    col__start, col__end = 0, 242
-    if test_tile is not None:
-        map_data = list(map(lambda x: 1 if x != test_tile else test_tile, map_data))
-    map_data = map_data[row__start * height:row__end * height]
-    map_data = [map_data[i * height: (i + 1) * height] for i in range(abs(row__start - row__end))]
-    map_data = [i[col__start:col__end] for i in map_data]
-    return map_data
-
-
-def test_map():
-    map_data = list(zip(*[
-        [1, 0, 1, 1, 1, 1],
-        [0, 0, 1, 0, 1, 0],
-        [1, 1, 1, 0, 1, 0],
-        [1, 0, 0, 0, 0, 0],
-        [0, 0, 1, 0, 1, 0],
-        [1, 1, 1, 0, 1, 0],
-        [1, 0, 0, 0, 0, 0],
-        [1, 1, 1, 1, 1, 1],
-    ]))
-    log.info('创建地图实例')
-    map_ = Tiles(map_data)
-    log.info('保存地图')
-    map_.save()
-
-
-def main():
-    from decode_savedata import decode_tile
-
-    with open('./saved_data/savadata4.json', 'r', encoding='utf-8') as savadata:
-        data = loads(savadata.read())
-
-    # from decode_savedata import load_savedata
-    # data = load_savedata('./saved_data/0000000002')
-
-    datatype = ['tiles', 'nav', 'nodeidtilemap', 'tiledata'][0]
-
-    tile_encode = data['map'][datatype]
-
-    # map_width = data['map']['width']
-    # map_height = data['map']['height']
-
-    if datatype == 'nodeidtilemap':
-        """
-        map.topology     这里存的应该都是 node 相关的数据
-                    ids  存放nodeid，与nodeidtilemap共同指明各node的分布与范围
-                    flattenedPoints  存放的是，各个node的边界，连接后可得到voronoi图
-                    nodes  貌似是各个node的细节
-        """
-        name_id_map = data['map'].get('topology', {}).get('ids', [])
-        name_id_map = {j: i + 1 for i, j in enumerate(name_id_map)}
-    elif datatype == 'tiles':
-        name_id_map = data['map'].get('world_tile_map')  # 地皮数量修改（22.06）之前的存档是没有该项的，且tiles与tiledata还没有分开
-    else:
-        name_id_map = {}
-
-    # tile_decode = decode_tile(tile_encode, 'tiledata')
-    tile_decode = decode_tile(tile_encode, datatype)
-    # tile_decode = clip_map(tile_decode, map_height)
-    # print(tile_decode[:100])
-    # print(set(tile_decode))
-
-    from time import time
-
-    start_time = time()
-
-    log.info('创建地图实例')
-    map_ = Tiles(tile_decode, name_id_map)
-    log.info('保存地图')
-    map_.save(f'map_{datatype}.svg')
-
-    print(time() - start_time)
-
-
-if __name__ == '__main__':
-    # main()
-    test_map()
-    pass
 
 """
 游戏内，地皮坐标轴正向是和地图坐标系一致的，在屏幕逆时针旋转 45° 后，向下是x(0, )的正向，向右是y(, 0)的正向
