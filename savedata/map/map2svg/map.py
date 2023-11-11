@@ -69,7 +69,7 @@ class Svg:
         print(self._declaration, end='')
         et.dump(self.root)
 
-    def save(self, save_path: str = 'export.svg', get_io=False):
+    def save(self, save_path: str = 'export.svg', get_io=False) -> Union[None, BytesIO]:
         # etree 没有对DTD的支持，也不允许定义根元素之外的注释，只能保存时候自行处理
         # MDN 给出的创作指南[https://jwatt.org/svg/authoring/]说最好不要加 DTD，编辑时间段是 2005~2007
         # 但是w3c的在线检测[https://validator.w3.org/]会检测这个，如果没有会被判定为 xml，暂时保持添加
@@ -752,7 +752,11 @@ class Map:
         self.svg: Svg = Svg(width=self.width, height=self.height, **self.svg_attr_common)
         self._g: dict[str, et.Element] = self.svg.g
 
-    def _format_data(self, width: int = None, height: int = None):
+        self.tile_names = self._get_tile_names()
+        self.priority = self._get_priority()
+        self.tile_colors = self._get_tile_colors()
+
+    def _format_data(self, width: int = None, height: int = None) -> None:
         if not self.map_data:
             raise ValueError('传入地图数据为空')
         if isinstance(self.map_data[0], int):
@@ -781,14 +785,14 @@ class Map:
         else:
             raise TypeError('传入地图数据格式错误')
 
-    def get_priority(self) -> list[int]:
+    def _get_tile_names(self) -> dict[int, str]:
+        return {i: str(i) for i in list(self.paths)}
+
+    def _get_priority(self) -> list[int]:
         # 根据地皮优先级列表，首先生成低优先级的，再生成高优先级的覆盖，用来实现不同优先级地皮间的覆盖效果
         return sorted(list(self.paths))
 
-    def get_tile_names(self) -> dict[int, str]:
-        return {i: str(i) for i in self.get_priority()}
-
-    def get_tile_colors(self) -> dict[str, str]:
+    def _get_tile_colors(self) -> dict[str, str]:
         tile_colors = {}
         colors = []
         for tile_code in self.paths:
@@ -799,16 +803,12 @@ class Map:
 
         return tile_colors
 
-    def save(self, save_path: str = 'map', get_io=False):
-        tile_list = self.get_priority()
-        tile_names = self.get_tile_names()
-        tile_colors = self.get_tile_colors()
-
-        for tile_code in tile_list:
-            tile_name = tile_names[tile_code]
+    def save(self, save_path: str = 'map', get_io=False) -> Union[None, BytesIO]:
+        for tile_code in self.priority:
+            tile_name = self.tile_names[tile_code]
             g_id = f'g_{tile_name}'
             if tile_name not in self._g:
-                color = tile_colors.get(tile_name)
+                color = self.tile_colors.get(tile_name)
                 # 通过边框实现地皮优先级覆盖会导致图形合并时连接的线也有边框，连接时避免同行同列，通过 M 命令连接可以避免
                 self.svg.creat_group(**{
                     'id': g_id,
@@ -826,226 +826,6 @@ class Map:
         # et.SubElement(self.root, 'path', {'stroke': 'red', 'stroke-width': '2', 'd': f'M{cx} {cy}Z'})
 
         return self.svg.save(save_path, get_io)
-
-
-class Tiles(Map):
-    svg_attr_common = {
-        'stroke-width': '0.3',
-        'stroke-linejoin': "round",
-        'stroke-linecap': "round",  # butt round square  无 圆角 方角
-    }
-    colors = {
-        'TEST': 'orange',  # 测试用途
-
-        'IMPASSABLE': '#000000',
-        'ROAD': '#D1AE6E',
-        'ROCKY': '#C2A163',
-        'DIRT': '#F4CC80',
-        'SAVANNA': '#DBA545',
-        'GRASS': '#C7BD51',
-        'FOREST': '#7D8146',
-        'MARSH': '#836549',
-        'WEB': '#000000',
-        'WOODFLOOR': '#AE894A',
-        'CARPET': '#B57647',
-        'CHECKER': '#CE9E60',
-        'CAVE': '#A48F63',
-        'FUNGUS': '#57625F',
-        'SINKHOLE': '#8C863C',
-        'UNDERROCK': '#715E42',
-        'MUD': '#8B5F2F',
-        'BRICK': '#77734F',
-        'BRICK_GLOW': '#787450',
-        'TILES': '#6C4643',
-        'TILES_GLOW': '#6E4744',
-        'TRIM': '#473A2F',
-        'TRIM_GLOW': '#6E4744',
-        'FUNGUSRED': '#9A6647',
-        'FUNGUSGREEN': '#69623A',
-        'DECIDUOUS': '#A8784C',
-        'DESERT_DIRT': '#E1B863',
-        'SCALE': '#5C4929',
-        'LAVAARENA_FLOOR': '#78270F',
-        'LAVAARENA_TRIM': '#78270F',
-        'QUAGMIRE_PEATFOREST': '#A0845A',
-        'QUAGMIRE_PARKFIELD': '#A4754A',
-        'QUAGMIRE_PARKSTONE': '#E7B879',
-        'QUAGMIRE_GATEWAY': '#8B853B',
-        'QUAGMIRE_SOIL': '#5A4429',
-        'QUAGMIRE_CITYSTONE': '#DBB773',
-        'PEBBLEBEACH': '#C0AD6B',
-        'METEOR': '#8AA36D',
-        'SHELLBEACH': '#C0AD6B',
-        'ARCHIVE': '#906137',
-        'FUNGUSMOON': '#59523A',
-        'FARMING_SOIL': '#554127',
-
-        'OCEAN_COASTAL': '#2E464E',
-        'OCEAN_COASTAL_SHORE': '#2F464D',
-        'OCEAN_SWELL': '#27354B',
-        'OCEAN_ROUGH': '#2B2838',
-        'OCEAN_BRINEPOOL': '#3E6467',
-        'OCEAN_BRINEPOOL_SHORE': '#2F464D',
-        'OCEAN_HAZARDOUS': '#1B181C',
-        'OCEAN_WATERLOG': '#3A6165',
-
-        'MONKEY_GROUND': '#BBA969',
-        'MONKEY_DOCK': '#85664B',
-        'MOSAIC_GREY': '#47362A',
-        'MOSAIC_RED': '#702D2E',
-        'MOSAIC_BLUE': '#46312D',
-        'CARPET2': '#34171E',
-    }
-    priority = {
-        'INVALID': -1,
-        'IMPASSABLE': 0,
-        'OCEAN_COASTAL_SHORE': 1,
-        'OCEAN_BRINEPOOL_SHORE': 2,
-        'OCEAN_COASTAL': 3,
-        'OCEAN_WATERLOG': 4,
-        'OCEAN_BRINEPOOL': 5,
-        'OCEAN_SWELL': 6,
-        'OCEAN_ROUGH': 7,
-        'OCEAN_HAZARDOUS': 8,
-        'QUAGMIRE_GATEWAY': 9,
-        'QUAGMIRE_CITYSTONE': 10,
-        'QUAGMIRE_PARKFIELD': 11,
-        'QUAGMIRE_PARKSTONE': 12,
-        'QUAGMIRE_PEATFOREST': 13,
-        'ROAD': 14,
-        'PEBBLEBEACH': 15,
-        'MONKEY_GROUND': 16,
-        'SHELLBEACH': 17,
-        'MARSH': 18,
-        'ROCKY': 19,
-        'SAVANNA': 20,
-        'FOREST': 21,
-        'GRASS': 22,
-        'DIRT': 23,
-        'DECIDUOUS': 24,
-        'DESERT_DIRT': 25,
-        'CAVE': 26,
-        'FUNGUS': 27,
-        'FUNGUSRED': 28,
-        'FUNGUSGREEN': 29,
-        'FUNGUSMOON': 30,
-        'SINKHOLE': 31,
-        'UNDERROCK': 32,
-        'MUD': 33,
-        'ARCHIVE': 34,
-        'BRICK_GLOW': 35,
-        'BRICK': 36,
-        'TILES_GLOW': 37,
-        'TILES': 38,
-        'TRIM_GLOW': 39,
-        'TRIM': 40,
-        'METEOR': 41,
-        'MONKEY_DOCK': 42,
-        'SCALE': 43,
-        'WOODFLOOR': 44,
-        'CHECKER': 45,
-        'MOSAIC_GREY': 46,
-        'MOSAIC_RED': 47,
-        'MOSAIC_BLUE': 48,
-        'CARPET2': 49,
-        'CARPET': 50,
-        'QUAGMIRE_SOIL': 51,
-        'FARMING_SOIL': 52,
-        'LAVAARENA_TRIM': 53,
-        'LAVAARENA_FLOOR': 54,
-    }
-    tiles_cache = {
-        0: 'TEST',
-        1: 'IMPASSABLE',
-        2: 'ROAD',
-        3: 'ROCKY',
-        4: 'DIRT',
-        5: 'SAVANNA',
-        6: 'GRASS',
-        7: 'FOREST',
-        8: 'MARSH',
-        9: 'WEB',
-        10: 'WOODFLOOR',
-        11: 'CARPET',
-        12: 'CHECKER',
-        13: 'CAVE',
-        14: 'FUNGUS',
-        15: 'SINKHOLE',
-        16: 'UNDERROCK',
-        17: 'MUD',
-        18: 'BRICK',
-        19: 'BRICK_GLOW',
-        20: 'TILES',
-        21: 'TILES_GLOW',
-        22: 'TRIM',
-        23: 'TRIM_GLOW',
-        24: 'FUNGUSRED',
-        25: 'FUNGUSGREEN',
-        30: 'DECIDUOUS',
-        31: 'DESERT_DIRT',
-        32: 'SCALE',
-        33: 'LAVAARENA_FLOOR',
-        34: 'LAVAARENA_TRIM',
-        35: 'QUAGMIRE_PEATFOREST',
-        36: 'QUAGMIRE_PARKFIELD',
-        37: 'QUAGMIRE_PARKSTONE',
-        38: 'QUAGMIRE_GATEWAY',
-        39: 'QUAGMIRE_SOIL',
-        41: 'QUAGMIRE_CITYSTONE',
-        42: 'PEBBLEBEACH',
-        43: 'METEOR',
-        44: 'SHELLBEACH',
-        45: 'ARCHIVE',
-        46: 'FUNGUSMOON',
-        47: 'FARMING_SOIL',
-        201: 'OCEAN_COASTAL',
-        202: 'OCEAN_COASTAL_SHORE',
-        203: 'OCEAN_SWELL',
-        204: 'OCEAN_ROUGH',
-        205: 'OCEAN_BRINEPOOL',
-        206: 'OCEAN_BRINEPOOL_SHORE',
-        207: 'OCEAN_HAZARDOUS',
-        208: 'OCEAN_WATERLOG',
-        256: 'MONKEY_GROUND',
-        257: 'MONKEY_DOCK',
-        258: 'MOSAIC_GREY',
-        259: 'MOSAIC_RED',
-        260: 'MOSAIC_BLUE',
-        261: 'CARPET2',
-        65535: 'INVALID',
-    }
-
-    def __init__(self, map_data: list[Union[int, Union[list[int], tuple[int]]]], tile_id_name: dict = None, is_flipped: bool = True):
-        super().__init__(map_data, is_flipped=is_flipped)
-
-        if tile_id_name is not None:
-            self.tile_names = {j: i for i, j in tile_id_name.items()}
-        else:
-            log.warning('未传入地皮名与地皮编号对应的关系，将使用预存的对应关系，对应关系并不一定准确')
-            self.tile_names = self.tiles_cache
-
-    def get_tile_names(self):
-        for i in self.paths:
-            if i not in self.tile_names:
-                self.tile_names[i] = str(i)
-        return self.tile_names
-
-    def get_tile_colors(self):
-        colors = []
-        tile_names = self.get_tile_names()
-        for i in self.paths:
-            i = tile_names[i]
-            if i not in self.colors:
-                if not colors:
-                    colors = self.svg_colors.copy()
-                    shuffle(colors)
-                color = colors.pop()
-                log.warning(f'{i} 没有对应的颜色，已选取随机颜色：{color}')
-                self.colors[str(i)] = color
-        return self.colors
-
-    def get_priority(self):
-        return sorted(list(self.paths), key=lambda x: self.priority.get(self.tiles_cache.get(x), 0))
 
 
 """
