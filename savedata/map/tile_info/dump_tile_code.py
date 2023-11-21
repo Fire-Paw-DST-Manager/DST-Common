@@ -5,51 +5,65 @@ ModManager:GetPostInitFns
 """
 import os
 from json import loads
-import lupa
+import lupa.lua51 as lupa
+
+# 游戏 data 文件夹的位置
+data_path = r"C:\Program Files (x86)\Steam\steamapps\common\Don't Starve Together\data"
 
 lua = lupa.LuaRuntime()
-# lua.globals().package.path = r'C:\Users\suke\Desktop\scripts\?.lua'
-# os.chdir(r'C:\Users\suke\Desktop')
-lua.globals().package.path = r"C:\Users\suke\Documents\python\dst-cluster\misc\data\databundles\scripts\?.lua"
-old_cwd = os.getcwd()
-os.chdir(r"C:\Program Files (x86)\Steam\steamapps\common\Don't Starve Together\data")
-lua.execute("""
-package.assetpath = {{path = ''}}
-MOD_API_VERSION = 10
-APP_VERSION = "DEV_UNKNOWN"
-utf8strtolower, utf8strtoupper, utf8strlen, utf8substr, utf8char = '', '', '', '', ''
-BRANCH = "staging"
-PLATFORM = "WIN32_STEAM"
-POT_GENERATION = true
-function IsConsole() return false end
-function IsPS4() return false end
-function IsXB1() return false end
-function IsRail() return false end
-function IsSteam() return true end
-function IsNotConsole() return true end
-Profile = {}
-function Profile:GetLanguageID() return LANGUAGE.CHINESE_S end
-function Profile:GetWorldCustomizationPresets() return {} end
-TheNet = {}
-function TheNet.IsDedicated() return false end
-function kleifileexists(filepath) local file = io.open(filepath, "rb") if file then file:close() end return file ~= nil end
-function module(a) end
-""")
-lua.require('strict')
-lua.require('class')
 
-lua.require('constants')
 
-lua.execute("""
-Asset = Class( function(self, type, file, param)
-    self.type = type
-    self.file = file
-    self.param = param
-end)""")
-lua.require('tilemanager')
-lua.require('tiledefs')
+def prework():
+    lua.globals().package.path = rf"{data_path}\databundles\scripts\?.lua"
+    old_cwd = os.getcwd()
+    os.chdir(data_path)
+    lua.execute("""
+    package.assetpath = {{path = ''}}
+    MOD_API_VERSION = 10
+    APP_VERSION = "DEV_UNKNOWN"
+    utf8strtolower, utf8strtoupper, utf8strlen, utf8substr, utf8char = '', '', '', '', ''
+    BRANCH = "staging"
+    PLATFORM = "WIN32_STEAM"
+    POT_GENERATION = true
+    function IsConsole() return false end
+    function IsPS4() return false end
+    function IsXB1() return false end
+    function IsRail() return false end
+    function IsSteam() return true end
+    function IsNotConsole() return true end
+    Profile = {}
+    function Profile:GetLanguageID() return LANGUAGE.CHINESE_S end
+    function Profile:GetWorldCustomizationPresets() return {} end
+    TheNet = {}
+    function TheNet.IsDedicated() return false end
+    function kleifileexists(filepath) local file = io.open(filepath, "rb") if file then file:close() end return file ~= nil end
+    function module(a) end
+    """)
+    lua.require('strict')
+    lua.require('class')
 
-lua.require("json")
+    lua.require('constants')
+
+    lua.execute("""
+    Asset = Class( function(self, type, file, param)
+        self.type = type
+        self.file = file
+        self.param = param
+    end)""")
+    lua.require('tilemanager')
+
+    # 这里需要解压 images.zip 到 data/levels/textures 下，用于文件验证
+    from os.path import exists
+    if not exists(r'levels\textures\images'):
+        from zipfile import ZipFile
+        with ZipFile('databundles/images.zip') as images:
+            images.extractall(r'levels\textures')
+    lua.require('tiledefs')
+
+    lua.require("json")
+
+
+prework()
 
 world_tiles = loads(lua.eval('encode(WORLD_TILES)'))
 # y = loads(lua.eval('encode(INVERTED_WORLD_TILES)'))
@@ -282,7 +296,7 @@ ground_properties = loads(lua.eval('encode(require("worldtiledefs").ground)'))
 
 # 按优先级排列的地皮编号的列表
 tiles = [i[0] for i in ground_properties]
-
+print(tiles)
 # 地皮编号为键，优先级为值的字典
 # priority_id = {j: i + 1 for i, j in enumerate(tiles)}
 priority_id = {
