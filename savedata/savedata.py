@@ -11,6 +11,7 @@ TheSim:ZipAndEncodeString('str') -> strwd
 
 from json import dumps
 from pathlib import Path
+from typing import Union
 
 import lupa.lua51 as lupa
 
@@ -44,7 +45,7 @@ class SaveData:
         self.all_data = self._load()
 
         # 正常存档一定会有的数据
-        self.map: Map
+        self.map: Union[Map, OldMap]
         self.meta: dict = {}
         self.world_network: dict = {}
         self.mods: dict = {}
@@ -76,9 +77,9 @@ class SaveData:
         """
         self.map: dict
         if 'tiledata' in self.map:
-            self.map: Map = Map(**self.map)
+            self.map = Map(**self.map)
         else:
-            self.map: OldMap = OldMap(**self.map)
+            self.map = OldMap(**self.map)
 
     def _format_data(self):
         data_list = list(self.all_data)
