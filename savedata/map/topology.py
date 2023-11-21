@@ -17,7 +17,7 @@ scripts/maputil.lua
 class _Node(BaseModel):
 
     # 与该 node 接壤的 其它 node
-    neighbours: list[int]
+    neighbours: list[int] = None
 
     # Default = 0,		    -- Land can touch any other Default node in the task that is within range
     # Blank = 1,		    -- empty room with impassable ground
@@ -43,7 +43,7 @@ class _Node(BaseModel):
     poly: list[list[int]]
 
     # 有效边
-    validedges: list[int]
+    validedges: list[int] = None
 
     # 覆盖的面积 单位是 墙距²
     area: int
@@ -75,7 +75,7 @@ class Topology(BaseModel):
 
     # 索引为 边在 flattenedEdges 中的索引，可据此获取该边。值为 该边隶属的 node 的 id
     # 为 false 时，情况与 flattenedEdges 相同
-    edgeToNodes: list[Union[list[int], Literal[False]]]
+    edgeToNodes: list[Union[list[int], Literal[False]]] = None
 
     # 按顺序排列的 nodeid，可根据索引将 nodidtilemap 中的编号转为对应的 nodeid
     ids: list[str]
@@ -93,7 +93,7 @@ class Topology(BaseModel):
     overrides: dict[str, Union[str, bool]]
 
     # 遍历 nodes 中每个 node 的 poly 中的点组成的列表   重复点跳过
-    flattenedPoints: list[list[int]]
+    flattenedPoints: list[list[int]] = None
 
     # 索引为 nodeid，
     nodes: list[_Node]
@@ -105,4 +105,4 @@ class Topology(BaseModel):
     # 将存的整数作为索引，在 flattenedPoints 中取点
     # 为 false 的为无效边，在 node.validedges 存有对应 node 的有效边
     # 无效边：不接壤两个 node、或忽略墙体与蜘蛛网的情况下，人物不能经寻路在两点行动
-    flattenedEdges: list[Union[list[int], Literal[False]]]
+    flattenedEdges: list[Union[list[int], Literal[False]]] = None
