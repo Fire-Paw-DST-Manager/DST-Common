@@ -62,6 +62,8 @@ def prework():
 
     lua.require("json")
 
+    os.chdir(old_cwd)
+
 
 prework()
 
@@ -71,9 +73,12 @@ ground_names = loads(lua.eval('encode(GROUND_NAMES)'))
 # print(world_tiles)
 # print(ground_names)
 
+# INVALID id 是 65535，以前 ground_names 是一个长度为 65536 的列表，现在会被截断，只保留到最大有效地皮的 id
+world_tiles.pop('INVALID')
+
 # 游戏本体的所有地皮 代码内名称与编号之间的关系
-# all_code_id = {i: world_tiles[i] for i in sorted(world_tiles, key=lambda x: world_tiles[x])}
-all_code_id = {
+all_code_id = {i: world_tiles[i] for i in sorted(world_tiles, key=lambda x: world_tiles[x])}
+_ = {
     "IMPASSABLE": 1,
     "ROAD": 2,
     "ROCKY": 3,
@@ -142,8 +147,8 @@ all_code_id = {
 }
 
 # 游戏本体的所有地皮 代码内名称与注册地皮时附带的名称之间的关系 这里的名称并不正规，比如可以重名，更多的是表达这是属于什么细分类型
-# all_code_name = {i: ground_names[j - 1] for i, j in all_code_id.items()}
-all_code_name = {
+all_code_name = {i: ground_names[j - 1] for i, j in all_code_id.items()}
+_ = {
     "IMPASSABLE": "Impassable",
     "ROAD": "Road",
     "ROCKY": "Rocky",
@@ -211,9 +216,11 @@ all_code_name = {
 
     "INVALID": None,
 }
+
 # 与 all_code_name 相似，只是把键由 code 换成了 id
-# all_id_name = {i: ground_names[i - 1] for i in all_code_id.values()}
-all_id_name = {1: 'Impassable',
+all_id_name = {i: ground_names[i - 1] for i in all_code_id.values()}
+# print(all_id_name)
+_ = {1: 'Impassable',
                2: 'Road',
                3: 'Rocky',
                4: 'Dirt',
@@ -278,6 +285,7 @@ all_id_name = {1: 'Impassable',
                260: 'Blue Mosaic',
                261: 'Carpet'}
 
+
 """
 local GroundTiles = require("worldtiledefs")
 io.open("ground_properties.json", "w"):write(json.encode(GroundTiles.ground))
@@ -297,9 +305,10 @@ ground_properties = loads(lua.eval('encode(require("worldtiledefs").ground)'))
 # 按优先级排列的地皮编号的列表
 tiles = [i[0] for i in ground_properties]
 print(tiles)
+
 # 地皮编号为键，优先级为值的字典
-# priority_id = {j: i + 1 for i, j in enumerate(tiles)}
-priority_id = {
+priority_id = {j: i + 1 for i, j in enumerate(tiles)}
+_ = {
     202: 1,
     206: 2,
     201: 3,
@@ -355,10 +364,11 @@ priority_id = {
     34: 53,
     33: 54
 }
+
 # 和上个相同，只是键由 id 换成了 code
-# all_id_code = {i: j for i, j in all_code_id.items()}
-# priority_code = {all_id_code[j]: i + 1 for i, j in enumerate(tiles)}
-priority_code = {
+all_id_code = {j: i for i, j in all_code_id.items()}
+priority_code = {all_id_code[j]: i + 1 for i, j in enumerate(tiles)}
+_ = {
     'OCEAN_COASTAL_SHORE': 1,
     'OCEAN_BRINEPOOL_SHORE': 2,
     'OCEAN_COASTAL': 3,
@@ -414,9 +424,10 @@ priority_code = {
     'LAVAARENA_TRIM': 53,
     'LAVAARENA_FLOOR': 54
 }
+
 # 将上个键值置换的字典
-# priority_ic = {j: i for i, j in priority_name}
-priority_ic = {
+priority_id_code = {j: i for i, j in priority_code.items()}
+_ = {
     1: 'OCEAN_COASTAL_SHORE',
     2: 'OCEAN_BRINEPOOL_SHORE',
     3: 'OCEAN_COASTAL',
