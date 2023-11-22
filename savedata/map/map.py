@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from typing import Union
 
 from typing_extensions import Annotated
 from pydantic import BaseModel
@@ -13,10 +12,6 @@ from .tiles_like_parser import (
     convert_nav
 )
 from .topology import Topology
-
-
-# lua table 转 dict 过程中，空 dict 会被判定为 list
-dict_type = Union[dict, list]
 
 
 class Map(BaseModel):
@@ -50,16 +45,16 @@ class Map(BaseModel):
     hideminimap: bool = None
 
     # 各个 node 中各类资源的密度
-    generated: dict[str, dict[str, Union[dict[str, float], list]]] = None
+    generated: dict[str, dict[str, dict[str, float]]] = None
 
     # 一些记录，比如天体打过多少次、漂流瓶都有谁开过一次等等，很多
-    persistdata: dict_type = None
+    persistdata: dict = None
 
     # 地皮与其编号的对应关系
-    world_tile_map: dict_type = None
+    world_tile_map: dict = None
 
     # 自然生成的小路的数据
-    roads: dict_type = None
+    roads: dict = None
 
     # 陆地之外是海洋还是虚空
     has_ocean: bool = None
