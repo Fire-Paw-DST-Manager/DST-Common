@@ -12,6 +12,7 @@ from .tiles_like_parser import (
     convert_nav
 )
 from .topology import Topology
+from .persistdata import Persistdata
 
 
 class Map(BaseModel):
@@ -48,7 +49,7 @@ class Map(BaseModel):
     generated: dict[str, dict[str, dict[str, float]]] = None
 
     # 一些记录，比如天体打过多少次、漂流瓶都有谁开过一次等等，很多
-    persistdata: dict = None
+    persistdata: Persistdata = None
 
     # 地皮与其编号的对应关系
     world_tile_map: dict = None

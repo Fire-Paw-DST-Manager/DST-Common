@@ -16,6 +16,8 @@ from typing import Union
 import lupa.lua51 as lupa
 
 from .map import Map, OldMap
+from .utils.table2dict import Converter
+from .utils.tileindex2position import PointPos
 
 
 class SaveData:
@@ -64,6 +66,8 @@ class SaveData:
         """
         验证并处理数据
         """
+        # 在实例化 map 对象之前，为其中某些数据建立坐标与索引的转换关系
+        PointPos.init(self.map.get('width'))
         self._map_process()
 
     def _map_process(self):
@@ -114,21 +118,7 @@ class SaveData:
 
         lua = lupa.LuaRuntime()
         xx = lua.eval('loadstring(python.eval("savedata"))()')
-        return self._table_dict(xx)
-
-    def _table_dict(self, lua_table):
-        typel = lupa.lua_type(lua_table)
-        if typel is None:  # ['nil', 'boolean', 'number', 'string'] -> python type:
-            return lua_table
-        elif typel == 'table':
-            # 因为没法区分 空 table 应该是 dict 还是 list，所以都转为 dict
-            # keys = list(lua_table)
-            # # 假如lupa.table为空，或keys从数字 1 开始并以 1 为单位递增，则认为是列表，否则为字典。其他情况有点复杂，就这样吧
-            # if not len(keys) or keys[0] == 1 and all(map(lambda x: keys[x] + 1 == keys[x + 1], range(len(keys) - 1))):
-            #     return [self._table_dict(x) for x in lua_table.values()]
-            return {x: self._table_dict(y) for x, y in lua_table.items()}
-        else:  # ['function', 'userdata', 'thread']
-            return f'this is a {typel}'
+        return Converter().table_dict(xx)
 
     def save(self, save_path: str = None):
         if save_path is None:
