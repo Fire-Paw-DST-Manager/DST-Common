@@ -65,13 +65,19 @@ def prework():
     os.chdir(old_cwd)
 
 
+"""
+现在获取的会缺失一部分，后面再查原因，下面这个是全的
+GetWorldTileMap()
+"""
+
+
 prework()
 
 world_tiles = loads(lua.eval('encode(WORLD_TILES)'))
 # y = loads(lua.eval('encode(INVERTED_WORLD_TILES)'))
 ground_names = loads(lua.eval('encode(GROUND_NAMES)'))
-# print(world_tiles)
-# print(ground_names)
+print(world_tiles)
+print(ground_names)
 
 # INVALID id 是 65535，以前 ground_names 是一个长度为 65536 的列表，现在会被截断，只保留到最大有效地皮的 id
 world_tiles.pop('INVALID')
@@ -145,6 +151,7 @@ _ = {
     "CARPET2": 261,
     "INVALID": 65535,
 }
+print(all_code_id)
 
 # 游戏本体的所有地皮 代码内名称与注册地皮时附带的名称之间的关系 这里的名称并不正规，比如可以重名，更多的是表达这是属于什么细分类型
 all_code_name = {i: ground_names[j - 1] for i, j in all_code_id.items()}
@@ -221,70 +228,69 @@ _ = {
 all_id_name = {i: ground_names[i - 1] for i in all_code_id.values()}
 # print(all_id_name)
 _ = {1: 'Impassable',
-               2: 'Road',
-               3: 'Rocky',
-               4: 'Dirt',
-               5: 'Savanna',
-               6: 'Grass',
-               7: 'Forest',
-               8: 'Marsh',
-               10: 'Wood',
-               11: 'Carpet',
-               12: 'Checkers',
-               13: 'Cave',
-               14: 'Blue Fungus',
-               15: 'Sinkhole',
-               16: 'Under Rock',
-               17: 'Mud',
-               18: 'Glowing Bricks',
-               19: 'Pale Bricks',
-               20: 'Glowing Tiles',
-               21: 'Pale Tiles',
-               22: 'Glowing Trim',
-               23: 'Pale Trim',
-               24: 'Red Fungus',
-               25: 'Green Fungus',
-               30: 'Deciduous',
-               31: 'Desert Dirt',
-               32: 'Scale',
-               33: 'Forge Floor',
-               34: 'Forge Trim',
-               35: 'Gorge Peat Forest',
-               36: 'Gorge Park Grass',
-               37: 'Gorge Park Path',
-               38: 'Gorge Gateway',
-               39: 'Gorge Soil',
-               41: 'Gorge Citystone',
-               42: 'Pebble Beach',
-               43: 'Meteor',
-               44: 'Shell Beach',
-               45: 'Archives',
-               46: 'Moon Fungus',
-               47: 'Farming Soil',
-               120: 'FUNGUSMOON_NOISE',
-               121: 'METEORMINE_NOISE',
-               122: 'METEORCOAST_NOISE',
-               123: 'DIRT_NOISE',
-               124: 'ABYSS_NOISE',
-               125: 'GROUND_NOISE',
-               126: 'CAVE_NOISE',
-               127: 'FUNGUS_NOISE',
-               200: 'Fake Ground',
-               201: 'Coastal Ocean',
-               202: 'Coastal Shore',
-               203: 'Swell Ocean',
-               204: 'Rough Ocean',
-               205: 'Brinepool',
-               206: 'Brinepool Shore',
-               207: 'Hazardous Ocean',
-               208: 'Waterlogged Ocean',
-               256: 'Pirate Beach',
-               257: 'Docks',
-               258: 'Grey Mosaic',
-               259: 'Red Mosaic',
-               260: 'Blue Mosaic',
-               261: 'Carpet'}
-
+     2: 'Road',
+     3: 'Rocky',
+     4: 'Dirt',
+     5: 'Savanna',
+     6: 'Grass',
+     7: 'Forest',
+     8: 'Marsh',
+     10: 'Wood',
+     11: 'Carpet',
+     12: 'Checkers',
+     13: 'Cave',
+     14: 'Blue Fungus',
+     15: 'Sinkhole',
+     16: 'Under Rock',
+     17: 'Mud',
+     18: 'Glowing Bricks',
+     19: 'Pale Bricks',
+     20: 'Glowing Tiles',
+     21: 'Pale Tiles',
+     22: 'Glowing Trim',
+     23: 'Pale Trim',
+     24: 'Red Fungus',
+     25: 'Green Fungus',
+     30: 'Deciduous',
+     31: 'Desert Dirt',
+     32: 'Scale',
+     33: 'Forge Floor',
+     34: 'Forge Trim',
+     35: 'Gorge Peat Forest',
+     36: 'Gorge Park Grass',
+     37: 'Gorge Park Path',
+     38: 'Gorge Gateway',
+     39: 'Gorge Soil',
+     41: 'Gorge Citystone',
+     42: 'Pebble Beach',
+     43: 'Meteor',
+     44: 'Shell Beach',
+     45: 'Archives',
+     46: 'Moon Fungus',
+     47: 'Farming Soil',
+     120: 'FUNGUSMOON_NOISE',
+     121: 'METEORMINE_NOISE',
+     122: 'METEORCOAST_NOISE',
+     123: 'DIRT_NOISE',
+     124: 'ABYSS_NOISE',
+     125: 'GROUND_NOISE',
+     126: 'CAVE_NOISE',
+     127: 'FUNGUS_NOISE',
+     200: 'Fake Ground',
+     201: 'Coastal Ocean',
+     202: 'Coastal Shore',
+     203: 'Swell Ocean',
+     204: 'Rough Ocean',
+     205: 'Brinepool',
+     206: 'Brinepool Shore',
+     207: 'Hazardous Ocean',
+     208: 'Waterlogged Ocean',
+     256: 'Pirate Beach',
+     257: 'Docks',
+     258: 'Grey Mosaic',
+     259: 'Red Mosaic',
+     260: 'Blue Mosaic',
+     261: 'Carpet'}
 
 """
 local GroundTiles = require("worldtiledefs")
